@@ -4,6 +4,16 @@ Token Meter 是一个 macOS 状态栏小工具，用来快速查看 Codex 额度
 
 启动后，应用只会常驻在顶部状态栏。点击状态栏百分比，可以展开小巧的额度面板；点击面板外部会自动隐藏。
 
+## 预览
+
+<p align="center">
+  <img src="assets/token_meter_1.png" alt="Token Meter 额度面板" width="420">
+</p>
+
+<p align="center">
+  <img src="assets/token_meter_2.png" alt="Token Meter 详情页" width="420">
+</p>
+
 ## 功能
 
 - 状态栏显示 5 小时额度剩余百分比
