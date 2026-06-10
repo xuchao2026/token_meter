@@ -150,8 +150,7 @@ struct CodexUsageSnapshot {
         for bucket in accountUsage.dailyBuckets {
             bucketsByDay[bucket.dayID, default: 0] += bucket.tokens
         }
-        let hasOfficialTodayBucket = bucketsByDay[todayID] != nil
-        if !hasOfficialTodayBucket, today.totalTokens > 0 {
+        if today.totalTokens > 0 {
             bucketsByDay[todayID] = today.totalTokens
         }
 
@@ -185,8 +184,8 @@ struct CodexUsageSnapshot {
         }
 
         return CodexUsageSnapshot(
-            generatedAt: accountUsage.fetchedAt,
-            today: hasOfficialTodayBucket ? totals(tokens(for: todayID)) : today,
+            generatedAt: generatedAt,
+            today: today.totalTokens > 0 ? today : totals(tokens(for: todayID)),
             yesterday: totals(tokens(for: yesterdayID)),
             sevenDays: sevenDays,
             month: month,

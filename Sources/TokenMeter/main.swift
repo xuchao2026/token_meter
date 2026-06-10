@@ -1,4 +1,45 @@
 import AppKit
+import QuartzCore
+
+final class RoundedVisualEffectView: NSVisualEffectView {
+    var cornerRadius: CGFloat = 30 {
+        didSet { updateRoundedMask() }
+    }
+
+    override func layout() {
+        super.layout()
+        updateRoundedMask()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateRoundedMask()
+    }
+
+    private func updateRoundedMask() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.cornerRadius = cornerRadius
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        maskImage = Self.maskImage(size: bounds.size, radius: cornerRadius)
+    }
+
+    private static func maskImage(size: NSSize, radius: CGFloat) -> NSImage {
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.black.setFill()
+        NSBezierPath(
+            roundedRect: NSRect(origin: .zero, size: size),
+            xRadius: radius,
+            yRadius: radius
+        ).fill()
+        image.unlockFocus()
+        return image
+    }
+}
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let compactWindowSize = NSSize(width: 380, height: 291)
@@ -35,9 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.isOpaque = false
         window.hasShadow = true
 
-        let containerView = NSView(frame: NSRect(origin: .zero, size: compactWindowSize))
-        containerView.wantsLayer = true
-        containerView.layer?.backgroundColor = NSColor.clear.cgColor
+        let containerView = RoundedVisualEffectView(frame: NSRect(origin: .zero, size: compactWindowSize))
+        containerView.material = .popover
+        containerView.blendingMode = .behindWindow
+        containerView.state = .active
+        containerView.autoresizingMask = [.width, .height]
+        containerView.cornerRadius = 30
 
         dashboardView.frame = containerView.bounds
         dashboardView.autoresizingMask = [.width, .height]
@@ -85,6 +129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func resizeWindow(showingDetails: Bool, animate: Bool = true) {
         let size = showingDetails ? detailWindowSize : compactWindowSize
         let oldFrame = window.frame
+        let cornerRadius: CGFloat = showingDetails ? 32 : 30
+        (window.contentView as? RoundedVisualEffectView)?.cornerRadius = cornerRadius
         window.minSize = size
         window.maxSize = size
 
@@ -96,7 +142,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             frame.origin.y = min(max(visible.minY + 12, frame.origin.y), visible.maxY - size.height - 12)
         }
 
-        window.setFrame(frame, display: true, animate: animate)
+        if animate {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.28
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                window.animator().setFrame(frame, display: true)
+            } completionHandler: { [weak self] in
+                self?.window.invalidateShadow()
+                self?.window.contentView?.needsLayout = true
+            }
+        } else {
+            window.setFrame(frame, display: true)
+            window.invalidateShadow()
+            window.contentView?.needsLayout = true
+        }
     }
 
     private func startOutsideClickMonitor() {

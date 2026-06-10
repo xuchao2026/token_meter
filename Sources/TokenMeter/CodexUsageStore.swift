@@ -5,6 +5,7 @@ final class CodexUsageStore {
 
     private let sampler = CodexUsageSampler()
     private let accountUsageClient = CodexAccountUsageClient()
+    private let accountUsageCache = CodexAccountUsageCache()
     private let rateLimitClient = CodexRateLimitClient()
     private let refreshQueue = DispatchQueue(label: "local.token-meter.refresh", qos: .utility)
     private var timer: Timer?
@@ -32,7 +33,7 @@ final class CodexUsageStore {
         refreshQueue.async { [weak self] in
             guard let self else { return }
             var nextSnapshot = self.sampler.snapshot()
-            if let accountUsage = self.accountUsageClient.readUsage() {
+            if let accountUsage = self.accountUsageCache.usageForToday(fetch: { self.accountUsageClient.readUsage() }) {
                 nextSnapshot = nextSnapshot.applyingAccountUsage(accountUsage)
             }
             if let quota = self.rateLimitClient.readQuota() {

@@ -20,20 +20,32 @@ final class DashboardView: NSView {
     }
     private var animationPhase: CGFloat = 0
     private var animationTimer: Timer?
+    private var transitionProgress: CGFloat = 1
+    private let transitionDuration: CGFloat = 0.28
+    private var detailRingProgress: CGFloat = 1
+    private let detailRingDuration: CGFloat = 1.35
+    private var trendDrawProgress: CGFloat = 1
+    private let trendDrawDuration: CGFloat = 1.7
+    private var detailPrimaryPercentStart: CGFloat = 0
+    private var detailPrimaryPercentTarget: CGFloat = 0
+    private var detailSecondaryPercentStart: CGFloat = 0
+    private var detailSecondaryPercentTarget: CGFloat = 0
+    private var animatedHistorySignature = ""
     private var trackingArea: NSTrackingArea?
     private var trendHoverRegions: [TrendHoverRegion] = []
     private var hoveredTrendIndex: Int?
 
-    private let panelFill = NSColor(calibratedRed: 0.16, green: 0.19, blue: 0.22, alpha: 0.86)
-    private let glassFill = NSColor(calibratedRed: 0.28, green: 0.32, blue: 0.36, alpha: 0.46)
-    private let hotGlassFill = NSColor(calibratedRed: 0.48, green: 0.18, blue: 0.22, alpha: 0.40)
-    private let borderColor = NSColor(calibratedRed: 0.82, green: 0.88, blue: 0.94, alpha: 0.38)
-    private let hotBorderColor = NSColor(calibratedRed: 1.0, green: 0.36, blue: 0.45, alpha: 0.84)
-    private let textColor = NSColor(calibratedRed: 0.95, green: 0.97, blue: 1.0, alpha: 1)
-    private let mutedTextColor = NSColor(calibratedRed: 0.73, green: 0.79, blue: 0.85, alpha: 1)
-    private let red = NSColor(calibratedRed: 1.0, green: 0.31, blue: 0.38, alpha: 1)
-    private let yellow = NSColor(calibratedRed: 1.0, green: 0.78, blue: 0.32, alpha: 1)
-    private let green = NSColor(calibratedRed: 0.33, green: 0.92, blue: 0.54, alpha: 1)
+    private let panelFill = NSColor(calibratedRed: 0.89, green: 0.90, blue: 0.88, alpha: 0.26)
+    private let glassFill = NSColor(calibratedRed: 1.0, green: 0.96, blue: 0.88, alpha: 0.34)
+    private let hotGlassFill = NSColor(calibratedRed: 1.0, green: 0.70, blue: 0.72, alpha: 0.24)
+    private let borderColor = NSColor(calibratedRed: 0.46, green: 0.50, blue: 0.54, alpha: 0.24)
+    private let hotBorderColor = NSColor(calibratedRed: 0.86, green: 0.24, blue: 0.30, alpha: 0.54)
+    private let textColor = NSColor(calibratedRed: 0.09, green: 0.10, blue: 0.12, alpha: 1)
+    private let mutedTextColor = NSColor(calibratedRed: 0.33, green: 0.35, blue: 0.38, alpha: 1)
+    private let red = NSColor(calibratedRed: 0.95, green: 0.24, blue: 0.29, alpha: 1)
+    private let yellow = NSColor(calibratedRed: 0.90, green: 0.63, blue: 0.20, alpha: 1)
+    private let green = NSColor(calibratedRed: 0.15, green: 0.72, blue: 0.38, alpha: 1)
+    private let sevenDayStatColor = NSColor(calibratedRed: 0.00, green: 0.48, blue: 0.78, alpha: 1)
     init(store: CodexUsageStore) {
         self.store = store
         super.init(frame: .zero)
@@ -96,9 +108,7 @@ final class DashboardView: NSView {
             return
         }
         if detailButtonRect.contains(point) {
-            isShowingDetails.toggle()
-            onDetailModeChange?(isShowingDetails)
-            needsDisplay = true
+            setShowingDetails(!isShowingDetails, animated: true)
             return
         }
 
@@ -114,10 +124,11 @@ final class DashboardView: NSView {
     }
 
     func showSummary() {
-        guard isShowingDetails else { return }
-        isShowingDetails = false
         clearTrendHover()
-        onDetailModeChange?(false)
+        isShowingDetails = false
+        transitionProgress = 1
+        detailRingProgress = 1
+        trendDrawProgress = 1
         needsDisplay = true
     }
 
@@ -140,15 +151,141 @@ final class DashboardView: NSView {
 
         let rootInset: CGFloat = 0
         let root = CGRect(origin: .zero, size: designSize).insetBy(dx: rootInset, dy: rootInset)
-        drawChrome(in: root)
-        drawHeader(in: root, state: store.snapshot)
-
+        let state = store.snapshot
         if isShowingDetails {
-            drawDetails(in: root)
-        } else {
-            drawQuotaContent(in: root, state: store.snapshot)
+            syncDetailAnimations(with: state, restart: false)
+        }
+
+        drawChrome(in: root)
+        drawHeader(in: root, state: state)
+
+        drawTransitionedContent(in: root) {
+            if isShowingDetails {
+                drawDetails(in: root, state: state)
+            } else {
+                drawQuotaContent(in: root, state: state)
+            }
         }
         NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private func setShowingDetails(_ showingDetails: Bool, animated: Bool) {
+        guard isShowingDetails != showingDetails else { return }
+        isShowingDetails = showingDetails
+        clearTrendHover()
+        transitionProgress = animated ? 0 : 1
+        if showingDetails {
+            syncDetailAnimations(with: store.snapshot, restart: true)
+        } else {
+            detailRingProgress = 1
+            trendDrawProgress = 1
+        }
+        onDetailModeChange?(showingDetails)
+        needsDisplay = true
+    }
+
+    private func drawTransitionedContent(in root: CGRect, drawContent: () -> Void) {
+        let progress = easedTransitionProgress()
+        let alpha = 0.30 + 0.70 * progress
+        let scale = 0.982 + 0.018 * progress
+        let yOffset = (isShowingDetails ? 14 : -10) * (1 - progress)
+
+        NSGraphicsContext.saveGraphicsState()
+        if transitionProgress < 1 {
+            NSGraphicsContext.current?.cgContext.setAlpha(alpha)
+            let affine = NSAffineTransform()
+            affine.translateX(by: root.midX, yBy: root.midY + yOffset)
+            affine.scaleX(by: scale, yBy: scale)
+            affine.translateX(by: -root.midX, yBy: -root.midY)
+            affine.concat()
+        }
+        drawContent()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private func easedTransitionProgress() -> CGFloat {
+        let progress = max(0, min(transitionProgress, 1))
+        return progress * progress * (3 - 2 * progress)
+    }
+
+    private func syncDetailAnimations(with state: CodexUsageSnapshot, restart: Bool) {
+        let primaryTarget = normalizedPercent(state.primaryWindow.remainingPercent)
+        let secondaryTarget = normalizedPercent(state.secondaryWindow.remainingPercent)
+        let historySignature = trendSignature(for: state.history)
+
+        if restart {
+            detailPrimaryPercentStart = 0
+            detailPrimaryPercentTarget = primaryTarget
+            detailSecondaryPercentStart = 0
+            detailSecondaryPercentTarget = secondaryTarget
+            detailRingProgress = 0
+            animatedHistorySignature = historySignature
+            trendDrawProgress = 0
+            return
+        }
+
+        if abs(primaryTarget - detailPrimaryPercentTarget) > 0.001 ||
+            abs(secondaryTarget - detailSecondaryPercentTarget) > 0.001 {
+            detailPrimaryPercentStart = animatedPercent(
+                from: detailPrimaryPercentStart,
+                to: detailPrimaryPercentTarget,
+                progress: detailRingProgress
+            )
+            detailSecondaryPercentStart = animatedPercent(
+                from: detailSecondaryPercentStart,
+                to: detailSecondaryPercentTarget,
+                progress: detailRingProgress
+            )
+            detailPrimaryPercentTarget = primaryTarget
+            detailSecondaryPercentTarget = secondaryTarget
+            detailRingProgress = 0
+        }
+
+        if historySignature != animatedHistorySignature {
+            animatedHistorySignature = historySignature
+            trendDrawProgress = 0
+        }
+    }
+
+    private func animatedPrimaryPercent() -> CGFloat {
+        animatedPercent(
+            from: detailPrimaryPercentStart,
+            to: detailPrimaryPercentTarget,
+            progress: detailRingProgress
+        )
+    }
+
+    private func animatedSecondaryPercent() -> CGFloat {
+        animatedPercent(
+            from: detailSecondaryPercentStart,
+            to: detailSecondaryPercentTarget,
+            progress: detailRingProgress
+        )
+    }
+
+    private func animatedPercent(from start: CGFloat, to target: CGFloat, progress: CGFloat) -> CGFloat {
+        start + (target - start) * smoothStep(progress)
+    }
+
+    private func easedTrendDrawProgress() -> CGFloat {
+        smoothStep(trendDrawProgress)
+    }
+
+    private func smoothStep(_ value: CGFloat) -> CGFloat {
+        let progress = max(0, min(value, 1))
+        return progress * progress * (3 - 2 * progress)
+    }
+
+    private func normalizedPercent(_ percent: Double?) -> CGFloat {
+        CGFloat(max(0, min((percent ?? 0) / 100, 1)))
+    }
+
+    private func percentText(_ percent: CGFloat) -> String {
+        "\(Int(round(max(0, min(percent, 1)) * 100)))%"
+    }
+
+    private func trendSignature(for history: [DailyUsagePoint]) -> String {
+        history.map { "\($0.dayID):\($0.totals.totalTokens)" }.joined(separator: "|")
     }
 
     private func updateTrendHover(at point: CGPoint) {
@@ -179,15 +316,22 @@ final class DashboardView: NSView {
 
         NSGraphicsContext.saveGraphicsState()
         path.addClip()
-        NSColor.black.withAlphaComponent(0.03).setFill()
+        let backdrop = NSGradient(colors: [
+            NSColor(calibratedRed: 1.0, green: 0.78, blue: 0.76, alpha: 0.14),
+            NSColor(calibratedRed: 1.0, green: 0.91, blue: 0.57, alpha: 0.12),
+            NSColor(calibratedRed: 0.28, green: 0.55, blue: 1.0, alpha: 0.14)
+        ])
+        backdrop?.draw(in: rect, angle: -78)
+
+        NSColor.white.withAlphaComponent(0.08).setFill()
         rect.fill()
-        NSColor.white.withAlphaComponent(0.075).setFill()
-        NSBezierPath(roundedRect: rect.insetBy(dx: 12, dy: 12), xRadius: radius - 10, yRadius: radius - 10).fill()
+        NSColor.white.withAlphaComponent(0.20).setStroke()
+        NSBezierPath(roundedRect: rect.insetBy(dx: 10, dy: 10), xRadius: radius - 10, yRadius: radius - 10).stroke()
         NSGraphicsContext.restoreGraphicsState()
 
         let inner = NSBezierPath(roundedRect: rect.insetBy(dx: 2, dy: 2), xRadius: radius - 2, yRadius: radius - 2)
         borderColor.setStroke()
-        inner.lineWidth = 2
+        inner.lineWidth = 1.4
         inner.stroke()
     }
 
@@ -237,12 +381,14 @@ final class DashboardView: NSView {
 
         drawInfoCard(
             title: "5小时窗口",
+            resetTime: resetClock(state.primaryWindow.resetsAt, style: .hourMinute),
             value: "\(Formatters.remainingPercent(state.primaryWindow)) · \(resetDescription(state.primaryWindow.resetsAt))",
             in: CGRect(x: cardX, y: root.minY + 132, width: cardWidth, height: 106),
             tint: state.primaryWindow.remainingPercent == nil ? nil : status.color
         )
         drawInfoCard(
             title: "7天窗口",
+            resetTime: resetClock(state.secondaryWindow.resetsAt, style: .monthDayHourMinute),
             value: "\(Formatters.remainingPercent(state.secondaryWindow)) · \(resetDescription(state.secondaryWindow.resetsAt))",
             in: CGRect(x: cardX, y: root.minY + 260, width: cardWidth, height: 106),
             tint: state.secondaryWindow.remainingPercent == nil ? nil : secondaryStatus.color
@@ -251,8 +397,7 @@ final class DashboardView: NSView {
         drawDetailButton(title: "详情", in: detailButtonRect)
     }
 
-    private func drawDetails(in root: CGRect) {
-        let state = store.snapshot
+    private func drawDetails(in root: CGRect, state: CodexUsageSnapshot) {
         let primaryStatus = quotaStatus(for: state.primaryWindow)
         let secondaryStatus = quotaStatus(for: state.secondaryWindow)
         let heroRect = CGRect(x: root.minX + 34, y: root.minY + 132, width: root.width - 68, height: 250)
@@ -293,8 +438,8 @@ final class DashboardView: NSView {
         let center = CGPoint(x: rect.midX, y: rect.minY + 118)
         let primaryStatus = quotaStatus(for: state.primaryWindow)
         let secondaryStatus = quotaStatus(for: state.secondaryWindow)
-        let outerProgress = CGFloat((state.secondaryWindow.remainingPercent ?? 0) / 100)
-        let innerProgress = CGFloat((state.primaryWindow.remainingPercent ?? 0) / 100)
+        let outerProgress = animatedSecondaryPercent()
+        let innerProgress = animatedPrimaryPercent()
 
         drawQuotaRing(
             center: center,
@@ -312,31 +457,54 @@ final class DashboardView: NSView {
         )
 
         drawFittedText(
-            Formatters.remainingPercent(state.secondaryWindow),
+            percentText(outerProgress),
             in: CGRect(x: center.x - 54, y: center.y - 48, width: 108, height: 24),
             font: .systemFont(ofSize: 20, weight: .heavy),
             color: secondaryStatus.color,
             alignment: .center
         )
         drawFittedText(
-            Formatters.remainingPercent(state.primaryWindow),
+            percentText(innerProgress),
             in: CGRect(x: center.x - 74, y: center.y - 8, width: 148, height: 48),
             font: .systemFont(ofSize: 42, weight: .heavy),
             color: primaryStatus.color,
             alignment: .center
         )
 
-        drawFittedText(
-            remainingDuration(state.primaryWindow.resetsAt),
-            in: CGRect(x: rect.minX + 24, y: rect.maxY - 48, width: 190, height: 34),
-            font: .systemFont(ofSize: 24, weight: .heavy),
-            color: primaryStatus.color,
+        let primaryDuration = remainingDuration(state.primaryWindow.resetsAt)
+        let secondaryDuration = remainingDuration(state.secondaryWindow.resetsAt)
+        let durationFont = NSFont.systemFont(ofSize: 24, weight: .heavy)
+        let resetFont = NSFont.systemFont(ofSize: 18, weight: .heavy)
+        let primaryDurationRect = CGRect(x: rect.minX + 24, y: rect.maxY - 48, width: 190, height: 34)
+        let secondaryDurationRect = CGRect(x: rect.maxX - 214, y: rect.maxY - 48, width: 190, height: 34)
+
+        drawResetClockText(
+            resetClock(state.primaryWindow.resetsAt, style: .hourMinute),
+            above: primaryDuration,
+            countdownRect: primaryDurationRect,
+            countdownFont: durationFont,
+            resetFont: resetFont,
             alignment: .left
         )
         drawFittedText(
-            remainingDuration(state.secondaryWindow.resetsAt),
-            in: CGRect(x: rect.maxX - 214, y: rect.maxY - 48, width: 190, height: 34),
-            font: .systemFont(ofSize: 24, weight: .heavy),
+            primaryDuration,
+            in: primaryDurationRect,
+            font: durationFont,
+            color: primaryStatus.color,
+            alignment: .left
+        )
+        drawResetClockText(
+            resetClock(state.secondaryWindow.resetsAt, style: .monthDayHourMinute),
+            above: secondaryDuration,
+            countdownRect: secondaryDurationRect,
+            countdownFont: durationFont,
+            resetFont: resetFont,
+            alignment: .right
+        )
+        drawFittedText(
+            secondaryDuration,
+            in: secondaryDurationRect,
+            font: durationFont,
             color: secondaryStatus.color,
             alignment: .right
         )
@@ -345,7 +513,7 @@ final class DashboardView: NSView {
     private func drawQuotaRing(center: CGPoint, radius: CGFloat, width: CGFloat, progress: CGFloat, color: NSColor) {
         let background = NSBezierPath()
         background.appendArc(withCenter: center, radius: radius, startAngle: 0, endAngle: 360, clockwise: false)
-        NSColor(calibratedRed: 0.18, green: 0.20, blue: 0.25, alpha: 0.78).setStroke()
+        NSColor(calibratedRed: 0.68, green: 0.72, blue: 0.76, alpha: 0.44).setStroke()
         background.lineWidth = width
         background.lineCapStyle = .round
         background.stroke()
@@ -361,8 +529,9 @@ final class DashboardView: NSView {
 
         NSGraphicsContext.saveGraphicsState()
         let shadow = NSShadow()
-        shadow.shadowColor = color.withAlphaComponent(0.32)
-        shadow.shadowBlurRadius = 16
+        let pulse = (sin(animationPhase * 2.0) + 1) / 2
+        shadow.shadowColor = color.withAlphaComponent(0.24 + pulse * 0.10)
+        shadow.shadowBlurRadius = 12 + pulse * 8
         shadow.shadowOffset = .zero
         shadow.set()
         color.setStroke()
@@ -408,9 +577,7 @@ final class DashboardView: NSView {
             color: textColor,
             alignment: .left
         )
-        let metaText = state.accountUsageFetchedAt == nil
-            ? "样本 \(state.eventCount.formatted())"
-            : "累计 \(Formatters.tokens(state.allTime.totalTokens))"
+        let metaText = "累计 \(Formatters.tokens(state.month.totalTokens))"
         drawFittedText(
             metaText,
             in: CGRect(x: rect.maxX - 148, y: rect.minY + 20, width: 128, height: 24),
@@ -423,7 +590,7 @@ final class DashboardView: NSView {
         let cardW = (rect.width - 52 - gap * 2) / 3
         let cardY = rect.minY + 66
         drawMiniStat(title: "今日", value: Formatters.tokens(state.today.totalTokens), raw: Formatters.rawTokens(state.today.totalTokens), color: NSColor(calibratedRed: 0.65, green: 0.55, blue: 1.0, alpha: 1), in: CGRect(x: rect.minX + 18, y: cardY, width: cardW, height: 82))
-        drawMiniStat(title: "近 7 天", value: Formatters.tokens(state.sevenDays.totalTokens), raw: Formatters.rawTokens(state.sevenDays.totalTokens), color: NSColor(calibratedRed: 0.36, green: 0.90, blue: 0.94, alpha: 1), in: CGRect(x: rect.minX + 18 + cardW + gap, y: cardY, width: cardW, height: 82))
+        drawMiniStat(title: "近 7 天", value: Formatters.tokens(state.sevenDays.totalTokens), raw: Formatters.rawTokens(state.sevenDays.totalTokens), color: sevenDayStatColor, in: CGRect(x: rect.minX + 18 + cardW + gap, y: cardY, width: cardW, height: 82))
         drawMiniStat(title: "本月", value: Formatters.tokens(state.month.totalTokens), raw: Formatters.rawTokens(state.month.totalTokens), color: textColor, in: CGRect(x: rect.minX + 18 + (cardW + gap) * 2, y: cardY, width: cardW, height: 82))
     }
 
@@ -475,7 +642,7 @@ final class DashboardView: NSView {
     private func drawTrendChart(in rect: CGRect, history: [DailyUsagePoint]) {
         trendHoverRegions = []
 
-        NSColor(calibratedRed: 0.16, green: 0.15, blue: 0.22, alpha: 0.54).setFill()
+        NSColor.white.withAlphaComponent(0.30).setFill()
         NSBezierPath(roundedRect: rect, xRadius: 14, yRadius: 14).fill()
 
         guard !history.isEmpty else {
@@ -494,6 +661,7 @@ final class DashboardView: NSView {
         let baseline = chartRect.maxY
         let accent = NSColor(calibratedRed: 0.36, green: 0.90, blue: 0.94, alpha: 1)
         let currentAccent = NSColor(calibratedRed: 0.65, green: 0.55, blue: 1.0, alpha: 1)
+        let revealProgress = easedTrendDrawProgress()
 
         for lineIndex in 0...3 {
             let y = chartRect.minY + chartRect.height * CGFloat(lineIndex) / 3
@@ -525,19 +693,21 @@ final class DashboardView: NSView {
             )
         }
 
-        if points.count > 1 {
+        let visiblePoints = revealedTrendPoints(points, progress: revealProgress)
+
+        if visiblePoints.count > 1 {
             let areaPath = NSBezierPath()
-            areaPath.move(to: points[0])
-            points.dropFirst().forEach { areaPath.line(to: $0) }
-            areaPath.line(to: CGPoint(x: points[points.count - 1].x, y: baseline))
-            areaPath.line(to: CGPoint(x: points[0].x, y: baseline))
+            areaPath.move(to: visiblePoints[0])
+            visiblePoints.dropFirst().forEach { areaPath.line(to: $0) }
+            areaPath.line(to: CGPoint(x: visiblePoints[visiblePoints.count - 1].x, y: baseline))
+            areaPath.line(to: CGPoint(x: visiblePoints[0].x, y: baseline))
             areaPath.close()
             accent.withAlphaComponent(0.14).setFill()
             areaPath.fill()
 
             let linePath = NSBezierPath()
-            linePath.move(to: points[0])
-            points.dropFirst().forEach { linePath.line(to: $0) }
+            linePath.move(to: visiblePoints[0])
+            visiblePoints.dropFirst().forEach { linePath.line(to: $0) }
 
             NSGraphicsContext.saveGraphicsState()
             let shadow = NSShadow()
@@ -554,10 +724,13 @@ final class DashboardView: NSView {
         }
 
         for (index, point) in points.enumerated() {
+            let pointReveal = trendPointReveal(index: index, count: points.count, progress: revealProgress)
+            let isVisible = pointReveal > 0.001
             let isHovered = hoveredTrendIndex == index
             let isCurrent = index == points.count - 1
             let pointColor = isCurrent ? currentAccent : accent
-            if isHovered {
+
+            if isHovered, revealProgress >= 0.98 {
                 pointColor.withAlphaComponent(0.18).setFill()
                 NSBezierPath(ovalIn: CGRect(x: point.x - 10, y: point.y - 10, width: 20, height: 20)).fill()
 
@@ -569,12 +742,18 @@ final class DashboardView: NSView {
                 guide.stroke()
             }
 
-            pointColor.setFill()
-            NSBezierPath(ovalIn: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8)).fill()
-            NSColor.white.withAlphaComponent(0.74).setStroke()
-            let pointRing = NSBezierPath(ovalIn: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8))
-            pointRing.lineWidth = 1
-            pointRing.stroke()
+            if isVisible {
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current?.cgContext.setAlpha(0.35 + 0.65 * pointReveal)
+                let dotRadius = 2.4 + 1.8 * pointReveal
+                pointColor.setFill()
+                NSBezierPath(ovalIn: CGRect(x: point.x - dotRadius, y: point.y - dotRadius, width: dotRadius * 2, height: dotRadius * 2)).fill()
+                NSColor.white.withAlphaComponent(0.74).setStroke()
+                let pointRing = NSBezierPath(ovalIn: CGRect(x: point.x - dotRadius, y: point.y - dotRadius, width: dotRadius * 2, height: dotRadius * 2))
+                pointRing.lineWidth = 1
+                pointRing.stroke()
+                NSGraphicsContext.restoreGraphicsState()
+            }
 
             drawFittedText(
                 history[index].label,
@@ -586,6 +765,7 @@ final class DashboardView: NSView {
         }
 
         if let hoveredTrendIndex,
+           revealProgress >= 0.98,
            history.indices.contains(hoveredTrendIndex) {
             drawTrendTooltip(
                 for: history[hoveredTrendIndex],
@@ -593,6 +773,39 @@ final class DashboardView: NSView {
                 in: rect
             )
         }
+    }
+
+    private func revealedTrendPoints(_ points: [CGPoint], progress: CGFloat) -> [CGPoint] {
+        guard !points.isEmpty else { return [] }
+        let clamped = max(0, min(progress, 1))
+        guard points.count > 1 else {
+            return clamped > 0 ? points : []
+        }
+        if clamped >= 0.999 {
+            return points
+        }
+
+        let segmentPosition = clamped * CGFloat(points.count - 1)
+        let segmentIndex = min(max(0, Int(floor(segmentPosition))), points.count - 2)
+        let segmentProgress = segmentPosition - CGFloat(segmentIndex)
+        let from = points[segmentIndex]
+        let to = points[segmentIndex + 1]
+        let interpolated = CGPoint(
+            x: from.x + (to.x - from.x) * segmentProgress,
+            y: from.y + (to.y - from.y) * segmentProgress
+        )
+
+        var visible = Array(points.prefix(segmentIndex + 1))
+        visible.append(interpolated)
+        return visible
+    }
+
+    private func trendPointReveal(index: Int, count: Int, progress: CGFloat) -> CGFloat {
+        guard count > 1 else { return progress }
+        let clamped = max(0, min(progress, 1))
+        let pointStep = CGFloat(index) / CGFloat(count - 1)
+        let revealWindow = max(0.08, 0.45 / CGFloat(count - 1))
+        return max(0, min((clamped - pointStep) / revealWindow, 1))
     }
 
     private func drawTrendTooltip(for point: DailyUsagePoint, at anchor: CGPoint, in rect: CGRect) {
@@ -605,15 +818,15 @@ final class DashboardView: NSView {
 
         NSGraphicsContext.saveGraphicsState()
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.32)
-        shadow.shadowBlurRadius = 12
-        shadow.shadowOffset = CGSize(width: 0, height: 4)
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.16)
+        shadow.shadowBlurRadius = 14
+        shadow.shadowOffset = CGSize(width: 0, height: 6)
         shadow.set()
-        NSColor(calibratedRed: 0.08, green: 0.10, blue: 0.13, alpha: 0.94).setFill()
+        NSColor.white.withAlphaComponent(0.92).setFill()
         path.fill()
         NSGraphicsContext.restoreGraphicsState()
 
-        borderColor.withAlphaComponent(0.56).setStroke()
+        borderColor.withAlphaComponent(0.38).setStroke()
         path.lineWidth = 1
         path.stroke()
 
@@ -633,8 +846,71 @@ final class DashboardView: NSView {
         )
     }
 
-    private func drawInfoCard(title: String, value: String, in rect: CGRect, tint: NSColor?, titleWidth: CGFloat = 190) {
+    private func drawResetClockText(
+        _ text: String,
+        above countdown: String,
+        countdownRect: CGRect,
+        countdownFont: NSFont,
+        resetFont: NSFont,
+        alignment: NSTextAlignment
+    ) {
+        let y = countdownRect.minY - 25
+        if alignment == .left {
+            let width = min(countdownRect.width + 48, max(38, measuredTextWidth(text, font: resetFont) + 8))
+            drawFittedText(
+                text,
+                in: CGRect(x: countdownRect.minX, y: y, width: width, height: 24),
+                font: resetFont,
+                color: mutedTextColor.withAlphaComponent(0.82),
+                alignment: .left
+            )
+        } else {
+            drawRightAlignedAuxText(
+                text,
+                rightEdge: valueRightEdge(countdown, in: countdownRect, font: countdownFont, alignment: alignment),
+                y: y,
+                maxWidth: countdownRect.width + 48,
+                font: resetFont
+            )
+        }
+    }
+
+    private func drawRightAlignedAuxText(_ text: String, rightEdge: CGFloat, y: CGFloat, maxWidth: CGFloat, font: NSFont) {
+        let width = min(maxWidth, max(38, measuredTextWidth(text, font: font) + 8))
+        drawFittedText(
+            text,
+            in: CGRect(x: rightEdge - width, y: y, width: width, height: 24),
+            font: font,
+            color: mutedTextColor.withAlphaComponent(0.82),
+            alignment: .right
+        )
+    }
+
+    private func valueRightEdge(_ text: String, in rect: CGRect, font: NSFont, alignment: NSTextAlignment) -> CGFloat {
+        switch alignment {
+        case .right:
+            return rect.maxX
+        case .center:
+            let width = min(rect.width, measuredTextWidth(text, font: font))
+            return rect.midX + width / 2
+        default:
+            return min(rect.maxX, rect.minX + measuredTextWidth(text, font: font))
+        }
+    }
+
+    private func measuredTextWidth(_ text: String, font: NSFont) -> CGFloat {
+        (text as NSString).size(withAttributes: [.font: font]).width
+    }
+
+    private func drawInfoCard(title: String, resetTime: String, value: String, in rect: CGRect, tint: NSColor?, titleWidth: CGFloat = 132) {
         drawGlassPanel(rect, radius: 26, highlighted: false, tint: tint)
+        let valueFont = NSFont.systemFont(ofSize: title == "计划" ? 30 : 26, weight: .heavy)
+        let valueRect = CGRect(
+            x: rect.minX + 24 + (title == "计划" ? 74 : 0),
+            y: rect.minY + (title == "计划" ? 23 : 58),
+            width: rect.width - 48 - (title == "计划" ? 74 : 0),
+            height: title == "计划" ? 34 : 36
+        )
         drawFittedText(
             title,
             in: CGRect(x: rect.minX + 26, y: rect.minY + 22, width: titleWidth, height: 28),
@@ -642,15 +918,17 @@ final class DashboardView: NSView {
             color: mutedTextColor,
             alignment: .left
         )
+        drawRightAlignedAuxText(
+            resetTime,
+            rightEdge: valueRightEdge(value, in: valueRect, font: valueFont, alignment: .left),
+            y: rect.minY + 24,
+            maxWidth: 188,
+            font: .systemFont(ofSize: 19, weight: .bold)
+        )
         drawFittedText(
             value,
-            in: CGRect(
-                x: rect.minX + 24 + (title == "计划" ? 74 : 0),
-                y: rect.minY + (title == "计划" ? 23 : 58),
-                width: rect.width - 48 - (title == "计划" ? 74 : 0),
-                height: title == "计划" ? 34 : 36
-            ),
-            font: .systemFont(ofSize: title == "计划" ? 30 : 26, weight: .heavy),
+            in: valueRect,
+            font: valueFont,
             color: textColor,
             alignment: .left
         )
@@ -658,21 +936,34 @@ final class DashboardView: NSView {
 
     private func drawGlassPanel(_ rect: CGRect, radius: CGFloat, highlighted: Bool, tint: NSColor? = nil) {
         let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.12)
+        shadow.shadowBlurRadius = 18
+        shadow.shadowOffset = CGSize(width: 0, height: 8)
+        shadow.set()
         (highlighted ? hotGlassFill : glassFill).setFill()
         path.fill()
+        NSGraphicsContext.restoreGraphicsState()
 
         if let tint {
-            tint.withAlphaComponent(highlighted ? 0.18 : 0.12).setFill()
+            tint.withAlphaComponent(highlighted ? 0.16 : 0.10).setFill()
             path.fill()
         }
 
-        let stroke = tint?.withAlphaComponent(0.40) ?? (highlighted ? hotBorderColor : borderColor)
+        NSGraphicsContext.saveGraphicsState()
+        path.addClip()
+        NSColor.white.withAlphaComponent(0.24).setFill()
+        CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height * 0.48).fill()
+        NSGraphicsContext.restoreGraphicsState()
+
+        let stroke = tint?.withAlphaComponent(0.34) ?? (highlighted ? hotBorderColor : borderColor)
         stroke.setStroke()
-        path.lineWidth = highlighted ? 2.0 : 1.5
+        path.lineWidth = highlighted ? 1.8 : 1.1
         path.stroke()
 
         let shine = NSBezierPath(roundedRect: rect.insetBy(dx: 2, dy: 2), xRadius: radius - 2, yRadius: radius - 2)
-        NSColor.white.withAlphaComponent(highlighted ? 0.05 : 0.03).setStroke()
+        NSColor.white.withAlphaComponent(highlighted ? 0.26 : 0.22).setStroke()
         shine.lineWidth = 1
         shine.stroke()
     }
@@ -704,8 +995,8 @@ final class DashboardView: NSView {
         let circle = NSBezierPath(ovalIn: rect)
 
         let bgGradient = NSGradient(colors: [
-            NSColor(calibratedRed: 0.24, green: 0.30, blue: 0.36, alpha: 0.82),
-            NSColor(calibratedRed: 0.05, green: 0.08, blue: 0.11, alpha: 0.90)
+            NSColor(calibratedRed: 0.90, green: 0.94, blue: 0.96, alpha: 0.72),
+            NSColor(calibratedRed: 0.60, green: 0.68, blue: 0.75, alpha: 0.52)
         ])
         bgGradient?.draw(in: circle, angle: -42)
 
@@ -714,7 +1005,7 @@ final class DashboardView: NSView {
 
         let fillHeight = max(progress * rect.height, progress > 0 ? 9 : 0)
         let fillRect = CGRect(x: rect.minX, y: rect.maxY - fillHeight, width: rect.width, height: fillHeight)
-        color.withAlphaComponent(0.78).setFill()
+        color.withAlphaComponent(0.62).setFill()
         fillRect.fill()
 
         let wave = NSBezierPath()
@@ -728,18 +1019,18 @@ final class DashboardView: NSView {
         wave.line(to: CGPoint(x: rect.maxX, y: rect.maxY))
         wave.line(to: CGPoint(x: rect.minX, y: rect.maxY))
         wave.close()
-        color.withAlphaComponent(0.95).setFill()
+        color.withAlphaComponent(0.78).setFill()
         wave.fill()
         NSGraphicsContext.restoreGraphicsState()
 
         let rim = NSBezierPath(ovalIn: rect)
-        borderColor.withAlphaComponent(0.86).setStroke()
+        NSColor(calibratedRed: 0.42, green: 0.48, blue: 0.54, alpha: 0.54).setStroke()
         rim.lineWidth = 2.2
         rim.stroke()
 
         NSGraphicsContext.saveGraphicsState()
         circle.addClip()
-        NSColor.white.withAlphaComponent(0.25).setFill()
+        NSColor.white.withAlphaComponent(0.34).setFill()
         let highlightRect = CGRect(x: rect.minX + 54, y: rect.minY + 34, width: 62, height: 30)
         let highlightCenter = CGPoint(x: highlightRect.midX, y: highlightRect.midY)
         let highlight = NSBezierPath(ovalIn: highlightRect)
@@ -753,14 +1044,14 @@ final class DashboardView: NSView {
             Formatters.remainingPercent(UsageWindow(usedPercent: remainingPercent.map { 100 - $0 }, windowMinutes: nil, resetsAt: nil)),
             in: CGRect(x: rect.minX + 36, y: rect.midY - 48, width: rect.width - 72, height: 68),
             font: .systemFont(ofSize: 58, weight: .heavy),
-            color: textColor,
+            color: NSColor(calibratedRed: 0.08, green: 0.10, blue: 0.13, alpha: 1),
             alignment: .center
         )
         drawFittedText(
             "剩余",
             in: CGRect(x: rect.minX + 64, y: rect.midY + 24, width: rect.width - 128, height: 30),
             font: .systemFont(ofSize: 24, weight: .heavy),
-            color: textColor,
+            color: NSColor(calibratedRed: 0.18, green: 0.20, blue: 0.24, alpha: 1),
             alignment: .center
         )
     }
@@ -940,6 +1231,16 @@ final class DashboardView: NSView {
         return ("绿灯", green)
     }
 
+    private func resetClock(_ date: Date?, style: ResetClockStyle) -> String {
+        guard let date else { return "--" }
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = .current
+        formatter.dateFormat = style == .hourMinute ? "HH:mm" : "M月d日 HH:mm"
+        return formatter.string(from: date)
+    }
+
     private func resetDescription(_ date: Date?) -> String {
         guard let date else { return "--" }
         let totalMinutes = max(0, Int(date.timeIntervalSinceNow / 60))
@@ -976,6 +1277,15 @@ final class DashboardView: NSView {
             guard let self else { return }
             guard self.window?.isVisible == true else { return }
             self.animationPhase += 1.0 / 30.0
+            if self.transitionProgress < 1 {
+                self.transitionProgress = min(1, self.transitionProgress + CGFloat(1.0 / 30.0) / self.transitionDuration)
+            }
+            if self.detailRingProgress < 1 {
+                self.detailRingProgress = min(1, self.detailRingProgress + CGFloat(1.0 / 30.0) / self.detailRingDuration)
+            }
+            if self.trendDrawProgress < 1 {
+                self.trendDrawProgress = min(1, self.trendDrawProgress + CGFloat(1.0 / 30.0) / self.trendDrawDuration)
+            }
             self.needsDisplay = true
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -1061,6 +1371,11 @@ private enum IconKind {
     case refresh
     case minus
     case close
+}
+
+private enum ResetClockStyle {
+    case hourMinute
+    case monthDayHourMinute
 }
 
 private struct TrendHoverRegion {
