@@ -42,13 +42,14 @@ final class RoundedVisualEffectView: NSVisualEffectView {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let compactWindowSize = NSSize(width: 380, height: 291)
-    private let detailWindowSize = NSSize(width: 470, height: 690)
+    private let compactWindowSize = NSSize(width: 346, height: 241)
+    private let detailWindowSize = NSSize(width: 428, height: 621)
     private var window: NSWindow!
     private var dashboardView: DashboardView!
     private var store: CodexUsageStore!
     private var statusItem: NSStatusItem!
     private var outsideClickMonitor: Any?
+    private var isPinned = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -58,6 +59,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dashboardView.onRefresh = { [weak self] in self?.store.refresh() }
         dashboardView.onHide = { [weak self] in self?.hideWindow() }
         dashboardView.onClose = { NSApp.terminate(nil) }
+        dashboardView.onPinToggle = { [weak self] isPinned in
+            self?.setPinned(isPinned)
+        }
         dashboardView.onDetailModeChange = { [weak self] isShowingDetails in
             self?.resizeWindow(showingDetails: isShowingDetails)
         }
@@ -115,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showWindow() {
         dashboardView.showSummary()
+        dashboardView.isPinned = isPinned
         resizeWindow(showingDetails: false, animate: false)
         placeWindowBelowStatusIcon()
         window.orderFrontRegardless()
@@ -124,6 +129,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hideWindow() {
         window.orderOut(nil)
         stopOutsideClickMonitor()
+    }
+
+    private func setPinned(_ pinned: Bool) {
+        isPinned = pinned
+        dashboardView.isPinned = pinned
+
+        if pinned {
+            stopOutsideClickMonitor()
+        } else if window.isVisible {
+            startOutsideClickMonitor()
+        }
     }
 
     private func resizeWindow(showingDetails: Bool, animate: Bool = true) {
@@ -160,8 +176,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startOutsideClickMonitor() {
         stopOutsideClickMonitor()
+        guard !isPinned else { return }
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
-            guard let self, self.window.isVisible else { return }
+            guard let self, self.window.isVisible, !self.isPinned else { return }
             let point = event.locationInWindow
             if self.window.frame.contains(point) || self.statusItemFrame()?.contains(point) == true {
                 return

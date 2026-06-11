@@ -5,17 +5,22 @@ final class DashboardView: NSView {
     var onRefresh: (() -> Void)?
     var onHide: (() -> Void)?
     var onClose: (() -> Void)?
+    var onPinToggle: ((Bool) -> Void)?
     var onDetailModeChange: ((Bool) -> Void)?
+    var isPinned = false {
+        didSet { needsDisplay = true }
+    }
 
     private let store: CodexUsageStore
     private var isShowingDetails = false
 
     private var refreshButtonRect = CGRect.zero
+    private var pinButtonRect = CGRect.zero
     private var hideButtonRect = CGRect.zero
     private var closeButtonRect = CGRect.zero
     private var detailButtonRect = CGRect.zero
-    private let compactDesignSize = CGSize(width: 680, height: 520)
-    private let detailDesignSize = CGSize(width: 680, height: 1_000)
+    private let compactDesignSize = CGSize(width: 618, height: 430)
+    private let detailDesignSize = CGSize(width: 620, height: 900)
     private var designSize: CGSize {
         isShowingDetails ? detailDesignSize : compactDesignSize
     }
@@ -105,6 +110,11 @@ final class DashboardView: NSView {
             onRefresh?()
             return
         }
+        if pinButtonRect.contains(point) {
+            isPinned.toggle()
+            onPinToggle?(isPinned)
+            return
+        }
         if hideButtonRect.contains(point) {
             onHide?()
             return
@@ -142,6 +152,7 @@ final class DashboardView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         refreshButtonRect = .zero
+        pinButtonRect = .zero
         hideButtonRect = .zero
         closeButtonRect = .zero
         detailButtonRect = .zero
@@ -414,19 +425,27 @@ final class DashboardView: NSView {
 
     private func drawHeader(in root: CGRect, state: CodexUsageSnapshot) {
         let status = overallQuotaStatus(for: state)
-        let dotOuter = CGRect(x: root.minX + 44, y: root.minY + 51, width: 34, height: 34)
-        drawStatusLight(in: dotOuter, color: status.color)
+        let outerInset: CGFloat = isShowingDetails ? 16 : 24
+        let leadingHeaderOffset: CGFloat = 12
+        let headerLeadingX = root.minX + outerInset + leadingHeaderOffset
+        let titleX = headerLeadingX + 50
+        let detailHeaderLift: CGFloat = isShowingDetails ? 6 : 0
+        let titleY = root.minY + (isShowingDetails ? 36 - detailHeaderLift : outerInset)
+        let statusY = isShowingDetails ? root.minY + 51 - detailHeaderLift : titleY + 10
+        let buttonY = root.minY + (isShowingDetails ? 45 - detailHeaderLift : outerInset)
+        let dotOuter = CGRect(x: headerLeadingX, y: statusY, width: 34, height: 34)
+        drawStatusLight(in: dotOuter, color: status.color, animated: hasQuotaData(state))
 
         drawFittedText(
-            "Codex 额度",
-            in: CGRect(x: root.minX + 94, y: root.minY + 36, width: 250, height: 42),
+            "Codex",
+            in: CGRect(x: titleX, y: titleY, width: 250, height: 42),
             font: .systemFont(ofSize: 32, weight: .heavy),
             color: textColor,
             alignment: .left
         )
         drawFittedText(
             (state.planType ?? "FREE").uppercased(),
-            in: CGRect(x: root.minX + 96, y: root.minY + 78, width: 230, height: 28),
+            in: CGRect(x: titleX + 2, y: titleY + 42, width: 230, height: 28),
             font: .systemFont(ofSize: 20, weight: .heavy),
             color: mutedTextColor,
             alignment: .left
@@ -434,15 +453,19 @@ final class DashboardView: NSView {
 
         let buttonSize: CGFloat = 52
         let gap: CGFloat = 14
-        closeButtonRect = CGRect(x: root.maxX - 44 - buttonSize, y: root.minY + 45, width: buttonSize, height: buttonSize)
+        closeButtonRect = CGRect(x: root.maxX - outerInset - buttonSize, y: buttonY, width: buttonSize, height: buttonSize)
         hideButtonRect = CGRect(x: closeButtonRect.minX - gap - buttonSize, y: closeButtonRect.minY, width: buttonSize, height: buttonSize)
         refreshButtonRect = CGRect(x: hideButtonRect.minX - gap - buttonSize, y: closeButtonRect.minY, width: buttonSize, height: buttonSize)
 
         if isShowingDetails {
-            detailButtonRect = CGRect(x: refreshButtonRect.minX - gap - 88, y: closeButtonRect.minY, width: 88, height: buttonSize)
+            pinButtonRect = CGRect(x: refreshButtonRect.minX - gap - buttonSize, y: closeButtonRect.minY, width: buttonSize, height: buttonSize)
+            detailButtonRect = CGRect(x: pinButtonRect.minX - gap - 88, y: closeButtonRect.minY, width: 88, height: buttonSize)
             drawDetailButton(title: "返回", in: detailButtonRect)
+        } else {
+            pinButtonRect = CGRect(x: refreshButtonRect.minX - gap - buttonSize, y: closeButtonRect.minY, width: buttonSize, height: buttonSize)
         }
         drawIconButton(in: refreshButtonRect, kind: .refresh, spinning: store.isRefreshing)
+        drawIconButton(in: pinButtonRect, kind: .pin, spinning: false, active: isPinned)
         drawIconButton(in: hideButtonRect, kind: .minus, spinning: false)
         drawIconButton(in: closeButtonRect, kind: .close, spinning: false)
     }
@@ -450,63 +473,75 @@ final class DashboardView: NSView {
     private func drawQuotaContent(in root: CGRect, state: CodexUsageSnapshot) {
         let status = quotaStatus(for: state.primaryWindow)
         let secondaryStatus = quotaStatus(for: state.secondaryWindow)
-        let meterRect = CGRect(x: root.minX + 62, y: root.minY + 190, width: 204, height: 204)
-        drawMeter(in: meterRect, remainingPercent: state.primaryWindow.remainingPercent, color: status.color)
+        let compactInset: CGFloat = 24
+        let meterRect = CGRect(x: root.minX + compactInset, y: root.minY + 166, width: 204, height: 204)
+        drawMeter(
+            in: meterRect,
+            remainingPercent: state.primaryWindow.remainingPercent,
+            color: status.color,
+            animated: state.primaryWindow.remainingPercent != nil
+        )
 
-        let cardX = root.minX + 322
-        let cardWidth = root.maxX - cardX - 36
+        let cardWidth: CGFloat = 322
+        let cardX = root.maxX - compactInset - cardWidth
 
         drawInfoCard(
             title: "5小时窗口",
             resetTime: resetClock(state.primaryWindow.resetsAt, style: .hourMinute),
-            value: "\(Formatters.remainingPercent(state.primaryWindow)) · \(resetDescription(state.primaryWindow.resetsAt))",
-            in: CGRect(x: cardX, y: root.minY + 132, width: cardWidth, height: 106),
+            percent: Formatters.remainingPercent(state.primaryWindow),
+            remaining: resetDescription(state.primaryWindow.resetsAt),
+            in: CGRect(x: cardX, y: root.minY + 112, width: cardWidth, height: 106),
+            style: .shortDuration,
             tint: state.primaryWindow.remainingPercent == nil ? nil : status.color
         )
         drawInfoCard(
             title: "7天窗口",
             resetTime: resetClock(state.secondaryWindow.resetsAt, style: .monthDayHourMinute),
-            value: "\(Formatters.remainingPercent(state.secondaryWindow)) · \(resetDescription(state.secondaryWindow.resetsAt))",
-            in: CGRect(x: cardX, y: root.minY + 260, width: cardWidth, height: 106),
+            percent: Formatters.remainingPercent(state.secondaryWindow),
+            remaining: resetDescription(state.secondaryWindow.resetsAt),
+            in: CGRect(x: cardX, y: root.minY + 226, width: cardWidth, height: 106),
+            style: .longDuration,
             tint: state.secondaryWindow.remainingPercent == nil ? nil : secondaryStatus.color
         )
-        detailButtonRect = CGRect(x: cardX, y: root.minY + 386, width: cardWidth, height: 56)
+        detailButtonRect = CGRect(x: cardX, y: root.minY + 350, width: cardWidth, height: 56)
         drawDetailButton(title: "详情", in: detailButtonRect)
     }
 
     private func drawDetails(in root: CGRect, state: CodexUsageSnapshot) {
         let primaryStatus = quotaStatus(for: state.primaryWindow)
         let secondaryStatus = quotaStatus(for: state.secondaryWindow)
-        let heroRect = CGRect(x: root.minX + 34, y: root.minY + 132, width: root.width - 68, height: 250)
+        let detailInset: CGFloat = 16
+        let heroRect = CGRect(x: root.minX + detailInset, y: root.minY + 108, width: root.width - detailInset * 2, height: 250)
         drawDetailHero(in: heroRect, state: state)
 
-        let cardGap: CGFloat = 14
-        let cardY = root.minY + 406
-        let cardW = (root.width - 68 - cardGap * 2) / 3
+        let cardGap: CGFloat = 12
+        let cardY = root.minY + 366
+        let cardW = (root.width - detailInset * 2 - cardGap * 2) / 3
+        let cardHeight: CGFloat = 116
         drawTokenCard(
             title: "5 小时余额",
             value: Formatters.remainingPercent(state.primaryWindow),
             subtitle: "已用 \(Formatters.usedPercent(state.primaryWindow.usedPercent))",
             accent: primaryStatus.color,
-            in: CGRect(x: root.minX + 34, y: cardY, width: cardW, height: 120)
+            in: CGRect(x: root.minX + detailInset, y: cardY, width: cardW, height: cardHeight)
         )
         drawTokenCard(
             title: "7 天余额",
             value: Formatters.remainingPercent(state.secondaryWindow),
             subtitle: "已用 \(Formatters.usedPercent(state.secondaryWindow.usedPercent))",
             accent: secondaryStatus.color,
-            in: CGRect(x: root.minX + 34 + cardW + cardGap, y: cardY, width: cardW, height: 120)
+            in: CGRect(x: root.minX + detailInset + cardW + cardGap, y: cardY, width: cardW, height: cardHeight)
         )
         drawTokenCard(
             title: "今日 Token",
             value: Formatters.tokens(state.today.totalTokens),
             subtitle: "本月 \(Formatters.tokens(state.month.totalTokens))",
             accent: textColor,
-            in: CGRect(x: root.minX + 34 + (cardW + cardGap) * 2, y: cardY, width: cardW, height: 120)
+            in: CGRect(x: root.minX + detailInset + (cardW + cardGap) * 2, y: cardY, width: cardW, height: cardHeight)
         )
 
-        drawConsumptionBoard(in: CGRect(x: root.minX + 34, y: root.minY + 548, width: root.width - 68, height: 170), state: state)
-        drawTrendBoard(in: CGRect(x: root.minX + 34, y: root.minY + 740, width: root.width - 68, height: 198), state: state)
+        drawConsumptionBoard(in: CGRect(x: root.minX + detailInset, y: root.minY + 498, width: root.width - detailInset * 2, height: 160), state: state)
+        drawTrendBoard(in: CGRect(x: root.minX + detailInset, y: root.minY + 674, width: root.width - detailInset * 2, height: 198), state: state)
     }
 
     private func drawDetailHero(in rect: CGRect, state: CodexUsageSnapshot) {
@@ -979,25 +1014,45 @@ final class DashboardView: NSView {
         (text as NSString).size(withAttributes: [.font: font]).width
     }
 
-    private func drawInfoCard(title: String, resetTime: String, value: String, in rect: CGRect, tint: NSColor?) {
+    private func drawInfoCard(
+        title: String,
+        resetTime: String,
+        percent: String,
+        remaining: String,
+        in rect: CGRect,
+        style: InfoCardValueStyle,
+        tint: NSColor?
+    ) {
         drawGlassPanel(rect, radius: 26, highlighted: false, tint: tint)
-        let valueFont = NSFont.systemFont(ofSize: title == "计划" ? 30 : 26, weight: .heavy)
-        let valueRect = CGRect(
-            x: rect.minX + 24 + (title == "计划" ? 74 : 0),
-            y: rect.minY + (title == "计划" ? 23 : 58),
-            width: rect.width - 48 - (title == "计划" ? 74 : 0),
-            height: title == "计划" ? 34 : 36
+        let valueFont = NSFont.systemFont(ofSize: 26, weight: .heavy)
+        let valueY = rect.minY + 58
+        let leftInset: CGFloat = 26
+        let rightInset: CGFloat = 18
+        let dotCenterX = rect.minX + (style == .longDuration ? 112 : 120)
+        let dotRect = CGRect(x: dotCenterX - 7, y: valueY, width: 14, height: 36)
+        let percentRect = CGRect(
+            x: rect.minX + leftInset,
+            y: valueY,
+            width: dotRect.minX - rect.minX - leftInset - 6,
+            height: 36
+        )
+        let remainingX = dotRect.maxX + 8
+        let remainingRect = CGRect(
+            x: remainingX,
+            y: valueY,
+            width: rect.maxX - rightInset - remainingX,
+            height: 36
         )
         let resetFont = NSFont.systemFont(ofSize: 19, weight: .bold)
         let resetWidth = min(176, max(54, measuredTextWidth(resetTime, font: resetFont) + 8))
         let titleRect = CGRect(
             x: rect.minX + 26,
             y: rect.minY + 22,
-            width: max(72, rect.width - 52 - resetWidth - 16),
+            width: max(72, rect.width - 26 - rightInset - resetWidth - 16),
             height: 28
         )
         let resetRect = CGRect(
-            x: rect.maxX - 26 - resetWidth,
+            x: rect.maxX - rightInset - resetWidth,
             y: rect.minY + 24,
             width: resetWidth,
             height: 24
@@ -1017,11 +1072,25 @@ final class DashboardView: NSView {
             alignment: .right
         )
         drawFittedText(
-            value,
-            in: valueRect,
+            percent,
+            in: percentRect,
             font: valueFont,
             color: textColor,
             alignment: .left
+        )
+        drawFittedText(
+            "•",
+            in: dotRect,
+            font: .systemFont(ofSize: 28, weight: .black),
+            color: textColor,
+            alignment: .center
+        )
+        drawFittedText(
+            remaining,
+            in: remainingRect,
+            font: valueFont,
+            color: textColor,
+            alignment: .right
         )
     }
 
@@ -1044,8 +1113,12 @@ final class DashboardView: NSView {
 
         NSGraphicsContext.saveGraphicsState()
         path.addClip()
-        NSColor.white.withAlphaComponent(0.24).setFill()
-        CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height * 0.48).fill()
+        let topGlow = NSGradient(colors: [
+            NSColor.white.withAlphaComponent(0.25),
+            NSColor.white.withAlphaComponent(0.11),
+            NSColor.white.withAlphaComponent(0.00)
+        ])
+        topGlow?.draw(in: rect, angle: -90)
         NSGraphicsContext.restoreGraphicsState()
 
         let stroke = tint?.withAlphaComponent(0.34) ?? (highlighted ? hotBorderColor : borderColor)
@@ -1059,29 +1132,38 @@ final class DashboardView: NSView {
         shine.stroke()
     }
 
-    private func drawStatusLight(in rect: CGRect, color: NSColor) {
-        let pulse = (sin(animationPhase * 2.2) + 1) / 2
-        color.withAlphaComponent(0.12 + pulse * 0.10).setFill()
-        NSBezierPath(ovalIn: rect.insetBy(dx: -5 - pulse * 5, dy: -5 - pulse * 5)).fill()
+    private func hasQuotaData(_ state: CodexUsageSnapshot) -> Bool {
+        state.primaryWindow.remainingPercent != nil || state.secondaryWindow.remainingPercent != nil
+    }
+
+    private func drawStatusLight(in rect: CGRect, color: NSColor, animated: Bool) {
+        let pulse = animated ? (sin(animationPhase * 2.2) + 1) / 2 : 0
+        let bulbRect = rect.insetBy(dx: 5, dy: 5)
+
+        if animated {
+            color.withAlphaComponent(0.08 + pulse * 0.06).setFill()
+            let haloOutset = 3 + pulse * 5
+            NSBezierPath(ovalIn: bulbRect.insetBy(dx: -haloOutset, dy: -haloOutset)).fill()
+        }
 
         NSGraphicsContext.saveGraphicsState()
         let shadow = NSShadow()
-        shadow.shadowColor = color.withAlphaComponent(0.48 + pulse * 0.18)
-        shadow.shadowBlurRadius = 8 + pulse * 7
+        shadow.shadowColor = color.withAlphaComponent(animated ? 0.46 + pulse * 0.14 : 0.16)
+        shadow.shadowBlurRadius = animated ? 6 + pulse * 5 : 3
         shadow.shadowOffset = .zero
         shadow.set()
 
         color.setFill()
-        NSBezierPath(ovalIn: rect.insetBy(dx: 7, dy: 7)).fill()
+        NSBezierPath(ovalIn: bulbRect).fill()
         NSGraphicsContext.restoreGraphicsState()
 
-        NSColor.white.withAlphaComponent(0.55).setStroke()
-        let ring = NSBezierPath(ovalIn: rect.insetBy(dx: 7, dy: 7))
-        ring.lineWidth = 1.6
+        NSColor.white.withAlphaComponent(animated ? 0.56 : 0.42).setStroke()
+        let ring = NSBezierPath(ovalIn: bulbRect)
+        ring.lineWidth = 1.8
         ring.stroke()
     }
 
-    private func drawMeter(in rect: CGRect, remainingPercent: Double?, color: NSColor) {
+    private func drawMeter(in rect: CGRect, remainingPercent: Double?, color: NSColor, animated: Bool) {
         let progress = CGFloat(max(0, min((remainingPercent ?? 0) / 100, 1)))
         let circle = NSBezierPath(ovalIn: rect)
 
@@ -1094,24 +1176,27 @@ final class DashboardView: NSView {
         NSGraphicsContext.saveGraphicsState()
         circle.addClip()
 
-        let fillHeight = max(progress * rect.height, progress > 0 ? 9 : 0)
-        let fillRect = CGRect(x: rect.minX, y: rect.maxY - fillHeight, width: rect.width, height: fillHeight)
-        color.withAlphaComponent(0.62).setFill()
-        fillRect.fill()
+        if remainingPercent != nil {
+            let fillHeight = max(progress * rect.height, progress > 0 ? 9 : 0)
+            let fillRect = CGRect(x: rect.minX, y: rect.maxY - fillHeight, width: rect.width, height: fillHeight)
+            color.withAlphaComponent(0.62).setFill()
+            fillRect.fill()
 
-        let wave = NSBezierPath()
-        let baseY = rect.maxY - fillHeight + 4
-        wave.move(to: CGPoint(x: rect.minX, y: baseY))
-        for step in 0...28 {
-            let x = rect.minX + rect.width * CGFloat(step) / 28
-            let y = baseY + sin(CGFloat(step) / 28 * CGFloat.pi * 3.2 + animationPhase * 2.7) * 10
-            wave.line(to: CGPoint(x: x, y: y))
+            let wave = NSBezierPath()
+            let baseY = rect.maxY - fillHeight + 4
+            let phase = animated ? animationPhase * 2.7 : 0
+            wave.move(to: CGPoint(x: rect.minX, y: baseY))
+            for step in 0...28 {
+                let x = rect.minX + rect.width * CGFloat(step) / 28
+                let y = baseY + sin(CGFloat(step) / 28 * CGFloat.pi * 3.2 + phase) * 10
+                wave.line(to: CGPoint(x: x, y: y))
+            }
+            wave.line(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            wave.line(to: CGPoint(x: rect.minX, y: rect.maxY))
+            wave.close()
+            color.withAlphaComponent(0.78).setFill()
+            wave.fill()
         }
-        wave.line(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        wave.line(to: CGPoint(x: rect.minX, y: rect.maxY))
-        wave.close()
-        color.withAlphaComponent(0.78).setFill()
-        wave.fill()
         NSGraphicsContext.restoreGraphicsState()
 
         let outerRimWidth: CGFloat = 2.2
@@ -1156,9 +1241,11 @@ final class DashboardView: NSView {
         )
     }
 
-    private func drawIconButton(in rect: CGRect, kind: IconKind, spinning: Bool) {
+    private func drawIconButton(in rect: CGRect, kind: IconKind, spinning: Bool, active: Bool = false) {
         if kind == .close {
             drawCloseButtonBackground(in: rect)
+        } else if kind == .pin, active {
+            drawGlassPanel(rect, radius: 18, highlighted: false, tint: green.withAlphaComponent(0.16))
         } else {
             drawGlassPanel(rect, radius: 18, highlighted: false)
         }
@@ -1170,6 +1257,14 @@ final class DashboardView: NSView {
                 return
             }
             drawRefreshFallbackIcon(in: rect, spinning: spinning)
+            return
+        case .pin:
+            let symbolName = active ? "pin.fill" : "pin"
+            let color = active ? green.withAlphaComponent(0.96) : textColor.withAlphaComponent(0.92)
+            if drawSystemSymbol(symbolName, in: rect, spinning: false, color: color, rotationDegrees: 180) {
+                return
+            }
+            drawPinFallbackIcon(in: rect, active: active)
             return
         case .minus:
             path.move(to: CGPoint(x: rect.minX + 17, y: rect.midY))
@@ -1212,7 +1307,13 @@ final class DashboardView: NSView {
         path.stroke()
     }
 
-    private func drawSystemSymbol(_ symbolName: String, in rect: CGRect, spinning: Bool) -> Bool {
+    private func drawSystemSymbol(
+        _ symbolName: String,
+        in rect: CGRect,
+        spinning: Bool,
+        color: NSColor? = nil,
+        rotationDegrees: CGFloat = 0
+    ) -> Bool {
         guard let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) else {
             return false
         }
@@ -1220,15 +1321,16 @@ final class DashboardView: NSView {
         let pointSize = rect.width * 0.44
         let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
         let configuredImage = image.withSymbolConfiguration(configuration) ?? image
-        let tintedImage = tintedSymbolImage(configuredImage, color: textColor.withAlphaComponent(0.92))
+        let tintedImage = tintedSymbolImage(configuredImage, color: color ?? textColor.withAlphaComponent(0.92))
         let side = rect.width * 0.46
         let drawRect = CGRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side)
 
         NSGraphicsContext.saveGraphicsState()
-        if spinning {
+        if spinning || rotationDegrees != 0 {
             let transform = NSAffineTransform()
             transform.translateX(by: rect.midX, yBy: rect.midY)
-            transform.rotate(byDegrees: -Double(animationPhase * 220))
+            let spinDegrees: CGFloat = spinning ? -animationPhase * 220 : 0
+            transform.rotate(byDegrees: Double(rotationDegrees + spinDegrees))
             transform.translateX(by: -rect.midX, yBy: -rect.midY)
             transform.concat()
         }
@@ -1305,6 +1407,31 @@ final class DashboardView: NSView {
         iconPath.stroke()
     }
 
+    private func drawPinFallbackIcon(in rect: CGRect, active: Bool) {
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let pinPath = NSBezierPath()
+        pinPath.move(to: CGPoint(x: center.x - 8, y: center.y - 12))
+        pinPath.curve(
+            to: CGPoint(x: center.x + 8, y: center.y - 12),
+            controlPoint1: CGPoint(x: center.x - 2, y: center.y - 18),
+            controlPoint2: CGPoint(x: center.x + 2, y: center.y - 18)
+        )
+        pinPath.line(to: CGPoint(x: center.x + 4, y: center.y + 2))
+        pinPath.line(to: CGPoint(x: center.x + 12, y: center.y + 8))
+        pinPath.move(to: CGPoint(x: center.x - 12, y: center.y + 8))
+        pinPath.line(to: CGPoint(x: center.x - 4, y: center.y + 2))
+        pinPath.line(to: CGPoint(x: center.x, y: center.y + 17))
+        pinPath.transform(using: AffineTransform(translationByX: -center.x, byY: -center.y))
+        pinPath.transform(using: AffineTransform(rotationByDegrees: 180))
+        pinPath.transform(using: AffineTransform(translationByX: center.x, byY: center.y))
+
+        (active ? green.withAlphaComponent(0.96) : textColor.withAlphaComponent(0.92)).setStroke()
+        pinPath.lineWidth = 3.0
+        pinPath.lineCapStyle = .round
+        pinPath.lineJoinStyle = .round
+        pinPath.stroke()
+    }
+
     private func drawDetailButton(title: String, in rect: CGRect) {
         drawGlassPanel(rect, radius: 17, highlighted: false)
         let kern: CGFloat = rect.width < 120 ? 0 : 3.2
@@ -1358,9 +1485,9 @@ final class DashboardView: NSView {
         let hours = totalMinutes / 60
         let minutes = totalMinutes % 60
         if hours > 0 {
-            return "\(hours)小时\(minutes)分钟后"
+            return "\(hours)小时\(minutes)分钟"
         }
-        return "\(minutes)分钟后"
+        return "\(minutes)分钟"
     }
 
     private func remainingDuration(_ date: Date?) -> String {
@@ -1475,8 +1602,14 @@ final class DashboardView: NSView {
 
 private enum IconKind {
     case refresh
+    case pin
     case minus
     case close
+}
+
+private enum InfoCardValueStyle {
+    case shortDuration
+    case longDuration
 }
 
 private enum ResetClockStyle {
