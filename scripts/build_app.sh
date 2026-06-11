@@ -2,11 +2,25 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_DIR="$ROOT_DIR/dist/Token Meter.app"
+VERSION="${1:-}"
+
+if [[ $# -gt 1 ]]; then
+  echo "Usage: $0 [version]" >&2
+  exit 1
+fi
+
+if [[ -n "$VERSION" ]]; then
+  DIST_DIR="$ROOT_DIR/dist/$VERSION"
+else
+  DIST_DIR="$ROOT_DIR/dist"
+fi
+
+APP_DIR="$DIST_DIR/Token Meter.app"
 
 cd "$ROOT_DIR"
 swift build -c release
 
+mkdir -p "$DIST_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 cp "$ROOT_DIR/.build/release/TokenMeter" "$APP_DIR/Contents/MacOS/TokenMeter"
