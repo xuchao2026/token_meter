@@ -99,7 +99,10 @@ struct CodexUsageSnapshot {
     )
 
     func applyingQuota(_ quota: CodexQuotaSnapshot) -> CodexUsageSnapshot {
-        CodexUsageSnapshot(
+        let quotaPlanType = quota.planType?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextPlanType = quotaPlanType?.isEmpty == false ? quotaPlanType : planType
+
+        return CodexUsageSnapshot(
             generatedAt: generatedAt,
             today: today,
             yesterday: yesterday,
@@ -109,8 +112,39 @@ struct CodexUsageSnapshot {
             lastTurn: lastTurn,
             primaryWindow: quota.primaryWindow,
             secondaryWindow: quota.secondaryWindow,
-            planType: quota.planType,
+            planType: nextPlanType,
             quotaFetchedAt: quota.fetchedAt,
+            modelContextWindow: modelContextWindow,
+            eventCount: eventCount,
+            fileCount: fileCount,
+            history: history,
+            categories: categories,
+            peakDailyTokens: peakDailyTokens,
+            longestRunningTurnSec: longestRunningTurnSec,
+            currentStreakDays: currentStreakDays,
+            longestStreakDays: longestStreakDays,
+            accountUsageFetchedAt: accountUsageFetchedAt
+        )
+    }
+
+    func applyingPlanType(_ cachedPlanType: String?) -> CodexUsageSnapshot {
+        guard let cachedPlanType = cachedPlanType?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !cachedPlanType.isEmpty else {
+            return self
+        }
+
+        return CodexUsageSnapshot(
+            generatedAt: generatedAt,
+            today: today,
+            yesterday: yesterday,
+            sevenDays: sevenDays,
+            month: month,
+            allTime: allTime,
+            lastTurn: lastTurn,
+            primaryWindow: primaryWindow,
+            secondaryWindow: secondaryWindow,
+            planType: cachedPlanType,
+            quotaFetchedAt: quotaFetchedAt,
             modelContextWindow: modelContextWindow,
             eventCount: eventCount,
             fileCount: fileCount,

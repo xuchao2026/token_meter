@@ -336,7 +336,7 @@ final class DashboardView: NSView {
     }
 
     private func drawHeader(in root: CGRect, state: CodexUsageSnapshot) {
-        let status = quotaStatus(for: state.primaryWindow)
+        let status = overallQuotaStatus(for: state)
         let dotOuter = CGRect(x: root.minX + 44, y: root.minY + 51, width: 34, height: 34)
         drawStatusLight(in: dotOuter, color: status.color)
 
@@ -902,7 +902,7 @@ final class DashboardView: NSView {
         (text as NSString).size(withAttributes: [.font: font]).width
     }
 
-    private func drawInfoCard(title: String, resetTime: String, value: String, in rect: CGRect, tint: NSColor?, titleWidth: CGFloat = 132) {
+    private func drawInfoCard(title: String, resetTime: String, value: String, in rect: CGRect, tint: NSColor?) {
         drawGlassPanel(rect, radius: 26, highlighted: false, tint: tint)
         let valueFont = NSFont.systemFont(ofSize: title == "计划" ? 30 : 26, weight: .heavy)
         let valueRect = CGRect(
@@ -911,19 +911,33 @@ final class DashboardView: NSView {
             width: rect.width - 48 - (title == "计划" ? 74 : 0),
             height: title == "计划" ? 34 : 36
         )
+        let resetFont = NSFont.systemFont(ofSize: 19, weight: .bold)
+        let resetWidth = min(176, max(54, measuredTextWidth(resetTime, font: resetFont) + 8))
+        let titleRect = CGRect(
+            x: rect.minX + 26,
+            y: rect.minY + 22,
+            width: max(72, rect.width - 52 - resetWidth - 16),
+            height: 28
+        )
+        let resetRect = CGRect(
+            x: rect.maxX - 26 - resetWidth,
+            y: rect.minY + 24,
+            width: resetWidth,
+            height: 24
+        )
         drawFittedText(
             title,
-            in: CGRect(x: rect.minX + 26, y: rect.minY + 22, width: titleWidth, height: 28),
+            in: titleRect,
             font: .systemFont(ofSize: 24, weight: .heavy),
             color: mutedTextColor,
             alignment: .left
         )
-        drawRightAlignedAuxText(
+        drawFittedText(
             resetTime,
-            rightEdge: valueRightEdge(value, in: valueRect, font: valueFont, alignment: .left),
-            y: rect.minY + 24,
-            maxWidth: 188,
-            font: .systemFont(ofSize: 19, weight: .bold)
+            in: resetRect,
+            font: resetFont,
+            color: mutedTextColor.withAlphaComponent(0.82),
+            alignment: .right
         )
         drawFittedText(
             value,
@@ -1023,10 +1037,35 @@ final class DashboardView: NSView {
         wave.fill()
         NSGraphicsContext.restoreGraphicsState()
 
-        let rim = NSBezierPath(ovalIn: rect)
+        let outerRimWidth: CGFloat = 2.2
+        let innerRimWidth: CGFloat = 3.2
+        let highlightWidth: CGFloat = 4.0
+        let radius = rect.width / 2
+
+        let rim = NSBezierPath(ovalIn: rect.insetBy(dx: outerRimWidth / 2, dy: outerRimWidth / 2))
         NSColor(calibratedRed: 0.42, green: 0.48, blue: 0.54, alpha: 0.54).setStroke()
-        rim.lineWidth = 2.2
+        rim.lineWidth = outerRimWidth
         rim.stroke()
+
+        let innerRimInset = outerRimWidth + innerRimWidth / 2
+        let innerRim = NSBezierPath(ovalIn: rect.insetBy(dx: innerRimInset, dy: innerRimInset))
+        NSColor.white.withAlphaComponent(0.38).setStroke()
+        innerRim.lineWidth = innerRimWidth
+        innerRim.stroke()
+
+        let highlightInset = outerRimWidth + innerRimWidth + highlightWidth / 2
+        let edgeHighlight = NSBezierPath()
+        edgeHighlight.appendArc(
+            withCenter: CGPoint(x: rect.midX, y: rect.midY),
+            radius: radius - highlightInset,
+            startAngle: 204,
+            endAngle: 326,
+            clockwise: true
+        )
+        NSColor.white.withAlphaComponent(0.52).setStroke()
+        edgeHighlight.lineWidth = highlightWidth
+        edgeHighlight.lineCapStyle = .round
+        edgeHighlight.stroke()
 
         NSGraphicsContext.saveGraphicsState()
         circle.addClip()
@@ -1229,6 +1268,14 @@ final class DashboardView: NSView {
             return ("黄灯", yellow)
         }
         return ("绿灯", green)
+    }
+
+    private func overallQuotaStatus(for state: CodexUsageSnapshot) -> (label: String, color: NSColor) {
+        if let sevenDayRemaining = state.secondaryWindow.remainingPercent,
+           sevenDayRemaining <= 0 {
+            return ("红灯", red)
+        }
+        return quotaStatus(for: state.primaryWindow)
     }
 
     private func resetClock(_ date: Date?, style: ResetClockStyle) -> String {

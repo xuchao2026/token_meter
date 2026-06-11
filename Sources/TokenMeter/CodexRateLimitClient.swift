@@ -7,6 +7,55 @@ struct CodexQuotaSnapshot {
     let fetchedAt: Date
 }
 
+final class CodexPlanTypeCache {
+    private struct CachePayload: Codable {
+        let planType: String
+        let updatedAt: Date
+    }
+
+    private let cacheURL: URL
+
+    init() {
+        let baseURL = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+        self.cacheURL = baseURL
+            .appendingPathComponent("Token Meter", isDirectory: true)
+            .appendingPathComponent("plan-type-cache.json")
+    }
+
+    func load() -> String? {
+        guard let data = try? Data(contentsOf: cacheURL),
+              let payload = try? JSONDecoder().decode(CachePayload.self, from: data) else {
+            return nil
+        }
+        return normalized(payload.planType)
+    }
+
+    func update(with planType: String?) -> String? {
+        guard let planType = normalized(planType) else {
+            return load()
+        }
+
+        let payload = CachePayload(planType: planType, updatedAt: Date())
+        guard let data = try? JSONEncoder().encode(payload) else { return planType }
+        try? FileManager.default.createDirectory(
+            at: cacheURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        try? data.write(to: cacheURL, options: [.atomic])
+        return planType
+    }
+
+    private func normalized(_ planType: String?) -> String? {
+        guard let planType else { return nil }
+        let trimmed = planType.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 final class CodexRateLimitClient {
     private let timeoutSeconds: TimeInterval = 12
     private let desktopCodexPath = "/Applications/Codex.app/Contents/Resources/codex"

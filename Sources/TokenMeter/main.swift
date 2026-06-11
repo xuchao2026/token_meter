@@ -228,12 +228,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let remaining = statusPercent(for: state.primaryWindow.remainingPercent)
         statusItem.button?.attributedTitle = statusBarTitle(
             remaining,
-            color: statusColor(for: state.primaryWindow.remainingPercent)
+            color: statusColor(for: state)
         )
         statusItem.button?.toolTip = "Codex Token 额度 · 5小时余 \(remaining) · 今日 \(Formatters.tokens(state.today.totalTokens))"
     }
 
-    private func statusColor(for remaining: Double?) -> NSColor {
+    private func statusColor(for state: CodexUsageSnapshot) -> NSColor {
+        if let sevenDayRemaining = state.secondaryWindow.remainingPercent,
+           sevenDayRemaining <= 0 {
+            return .systemRed
+        }
+        return statusColor(forRemaining: state.primaryWindow.remainingPercent)
+    }
+
+    private func statusColor(forRemaining remaining: Double?) -> NSColor {
         guard let remaining else { return .systemGray }
         if remaining < 10 { return .systemRed }
         if remaining < 20 { return .systemYellow }
