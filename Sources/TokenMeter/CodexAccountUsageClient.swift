@@ -1,11 +1,11 @@
 import Foundation
 
-struct AccountUsageDailyBucket {
+struct AccountUsageDailyBucket: Codable {
     let dayID: String
     let tokens: UInt64
 }
 
-struct CodexAccountUsageSnapshot {
+struct CodexAccountUsageSnapshot: Codable {
     let lifetimeTokens: UInt64
     let peakDailyTokens: UInt64
     let longestRunningTurnSec: UInt64
@@ -13,6 +13,88 @@ struct CodexAccountUsageSnapshot {
     let longestStreakDays: Int
     let dailyBuckets: [AccountUsageDailyBucket]
     let fetchedAt: Date
+}
+
+final class CodexAccountUsageCache {
+    private struct CachePayload: Codable {
+        let cacheDayID: String
+        let snapshot: CodexAccountUsageSnapshot
+    }
+
+    private let retryInterval: TimeInterval = 10 * 60
+    private let dayFormatter: DateFormatter
+    private let cacheURL: URL
+    private var lastAttemptDayID: String?
+    private var lastAttemptAt: Date?
+
+    init() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "zh_CN")
+        calendar.timeZone = .current
+
+        let dayFormatter = DateFormatter()
+        dayFormatter.calendar = calendar
+        dayFormatter.locale = Locale(identifier: "zh_CN")
+        dayFormatter.timeZone = .current
+        dayFormatter.dateFormat = "yyyy-MM-dd"
+        self.dayFormatter = dayFormatter
+
+        let baseURL = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+        self.cacheURL = baseURL
+            .appendingPathComponent("Token Meter", isDirectory: true)
+            .appendingPathComponent("account-usage-cache.json")
+    }
+
+    func usageForToday(fetch: () -> CodexAccountUsageSnapshot?) -> CodexAccountUsageSnapshot? {
+        let now = Date()
+        let todayID = dayFormatter.string(from: now)
+        let cachedPayload = loadPayload()
+
+        if cachedPayload?.cacheDayID == todayID {
+            return cachedPayload?.snapshot
+        }
+
+        if shouldAttemptFetch(for: todayID, now: now),
+           let freshSnapshot = fetch() {
+            save(snapshot: freshSnapshot, cacheDayID: todayID)
+            return freshSnapshot
+        }
+
+        return cachedPayload?.snapshot
+    }
+
+    private func shouldAttemptFetch(for todayID: String, now: Date) -> Bool {
+        guard lastAttemptDayID == todayID, let lastAttemptAt else {
+            lastAttemptDayID = todayID
+            lastAttemptAt = now
+            return true
+        }
+
+        if now.timeIntervalSince(lastAttemptAt) >= retryInterval {
+            self.lastAttemptAt = now
+            return true
+        }
+        return false
+    }
+
+    private func loadPayload() -> CachePayload? {
+        guard let data = try? Data(contentsOf: cacheURL) else { return nil }
+        return try? JSONDecoder().decode(CachePayload.self, from: data)
+    }
+
+    private func save(snapshot: CodexAccountUsageSnapshot, cacheDayID: String) {
+        let payload = CachePayload(cacheDayID: cacheDayID, snapshot: snapshot)
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        try? FileManager.default.createDirectory(
+            at: cacheURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        try? data.write(to: cacheURL, options: [.atomic])
+    }
 }
 
 final class CodexAccountUsageClient {
