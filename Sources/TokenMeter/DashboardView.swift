@@ -1038,9 +1038,7 @@ final class DashboardView: NSView {
         NSGraphicsContext.restoreGraphicsState()
 
         let outerRimWidth: CGFloat = 2.2
-        let innerRimWidth: CGFloat = 3.2
-        let highlightWidth: CGFloat = 4.0
-        let radius = rect.width / 2
+        let innerRimWidth: CGFloat = 5.0
 
         let rim = NSBezierPath(ovalIn: rect.insetBy(dx: outerRimWidth / 2, dy: outerRimWidth / 2))
         NSColor(calibratedRed: 0.42, green: 0.48, blue: 0.54, alpha: 0.54).setStroke()
@@ -1049,23 +1047,9 @@ final class DashboardView: NSView {
 
         let innerRimInset = outerRimWidth + innerRimWidth / 2
         let innerRim = NSBezierPath(ovalIn: rect.insetBy(dx: innerRimInset, dy: innerRimInset))
-        NSColor.white.withAlphaComponent(0.38).setStroke()
+        NSColor.white.withAlphaComponent(0.46).setStroke()
         innerRim.lineWidth = innerRimWidth
         innerRim.stroke()
-
-        let highlightInset = outerRimWidth + innerRimWidth + highlightWidth / 2
-        let edgeHighlight = NSBezierPath()
-        edgeHighlight.appendArc(
-            withCenter: CGPoint(x: rect.midX, y: rect.midY),
-            radius: radius - highlightInset,
-            startAngle: 204,
-            endAngle: 326,
-            clockwise: true
-        )
-        NSColor.white.withAlphaComponent(0.52).setStroke()
-        edgeHighlight.lineWidth = highlightWidth
-        edgeHighlight.lineCapStyle = .round
-        edgeHighlight.stroke()
 
         NSGraphicsContext.saveGraphicsState()
         circle.addClip()
