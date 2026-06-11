@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 final class DashboardView: NSView {
     var onRefresh: (() -> Void)?
@@ -20,8 +21,8 @@ final class DashboardView: NSView {
     }
     private var animationPhase: CGFloat = 0
     private var animationTimer: Timer?
-    private var transitionProgress: CGFloat = 1
-    private let transitionDuration: CGFloat = 0.28
+    private let transitionDuration: CGFloat = 0.38
+    private weak var snapshotTransitionLayer: CALayer?
     private var detailRingProgress: CGFloat = 1
     private let detailRingDuration: CGFloat = 1.35
     private var trendDrawProgress: CGFloat = 1
@@ -76,6 +77,11 @@ final class DashboardView: NSView {
         }
     }
 
+    override func layout() {
+        super.layout()
+        snapshotTransitionLayer?.frame = bounds
+    }
+
     override func updateTrackingAreas() {
         if let trackingArea {
             removeTrackingArea(trackingArea)
@@ -126,7 +132,8 @@ final class DashboardView: NSView {
     func showSummary() {
         clearTrendHover()
         isShowingDetails = false
-        transitionProgress = 1
+        snapshotTransitionLayer?.removeFromSuperlayer()
+        snapshotTransitionLayer = nil
         detailRingProgress = 1
         trendDrawProgress = 1
         needsDisplay = true
@@ -159,21 +166,17 @@ final class DashboardView: NSView {
         drawChrome(in: root)
         drawHeader(in: root, state: state)
 
-        drawTransitionedContent(in: root) {
-            if isShowingDetails {
-                drawDetails(in: root, state: state)
-            } else {
-                drawQuotaContent(in: root, state: state)
-            }
-        }
+        drawContent(in: root, state: state, showingDetails: isShowingDetails)
         NSGraphicsContext.restoreGraphicsState()
     }
 
     private func setShowingDetails(_ showingDetails: Bool, animated: Bool) {
         guard isShowingDetails != showingDetails else { return }
+        let outgoingSnapshot = animated
+            ? makeContentSnapshot(showingDetails: isShowingDetails, state: store.snapshot)
+            : nil
         isShowingDetails = showingDetails
         clearTrendHover()
-        transitionProgress = animated ? 0 : 1
         if showingDetails {
             syncDetailAnimations(with: store.snapshot, restart: true)
         } else {
@@ -182,30 +185,104 @@ final class DashboardView: NSView {
         }
         onDetailModeChange?(showingDetails)
         needsDisplay = true
-    }
-
-    private func drawTransitionedContent(in root: CGRect, drawContent: () -> Void) {
-        let progress = easedTransitionProgress()
-        let alpha = 0.30 + 0.70 * progress
-        let scale = 0.982 + 0.018 * progress
-        let yOffset = (isShowingDetails ? 14 : -10) * (1 - progress)
-
-        NSGraphicsContext.saveGraphicsState()
-        if transitionProgress < 1 {
-            NSGraphicsContext.current?.cgContext.setAlpha(alpha)
-            let affine = NSAffineTransform()
-            affine.translateX(by: root.midX, yBy: root.midY + yOffset)
-            affine.scaleX(by: scale, yBy: scale)
-            affine.translateX(by: -root.midX, yBy: -root.midY)
-            affine.concat()
+        if let outgoingSnapshot {
+            startSnapshotTransition(with: outgoingSnapshot, openingDetails: showingDetails)
         }
-        drawContent()
-        NSGraphicsContext.restoreGraphicsState()
     }
 
-    private func easedTransitionProgress() -> CGFloat {
-        let progress = max(0, min(transitionProgress, 1))
-        return progress * progress * (3 - 2 * progress)
+    private func drawContent(in root: CGRect, state: CodexUsageSnapshot, showingDetails: Bool) {
+        if showingDetails {
+            drawDetails(in: root, state: state)
+        } else {
+            drawQuotaContent(in: root, state: state)
+        }
+    }
+
+    private func makeContentSnapshot(showingDetails: Bool, state: CodexUsageSnapshot) -> NSImage {
+        let size = showingDetails ? detailDesignSize : compactDesignSize
+        let image = NSImage(size: size)
+        let root = CGRect(origin: .zero, size: size)
+
+        let savedRefreshButtonRect = refreshButtonRect
+        let savedHideButtonRect = hideButtonRect
+        let savedCloseButtonRect = closeButtonRect
+        let savedDetailButtonRect = detailButtonRect
+        let savedTrendHoverRegions = trendHoverRegions
+
+        image.lockFocusFlipped(true)
+        NSGraphicsContext.current?.imageInterpolation = .high
+        NSColor.clear.setFill()
+        root.fill()
+        drawContent(in: root, state: state, showingDetails: showingDetails)
+        image.unlockFocus()
+
+        refreshButtonRect = savedRefreshButtonRect
+        hideButtonRect = savedHideButtonRect
+        closeButtonRect = savedCloseButtonRect
+        detailButtonRect = savedDetailButtonRect
+        trendHoverRegions = savedTrendHoverRegions
+
+        return image
+    }
+
+    private func startSnapshotTransition(with image: NSImage, openingDetails: Bool) {
+        guard let hostLayer = layer,
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return
+        }
+
+        snapshotTransitionLayer?.removeFromSuperlayer()
+
+        let overlay = CALayer()
+        overlay.frame = bounds
+        overlay.contents = cgImage
+        overlay.contentsGravity = .resizeAspect
+        overlay.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        overlay.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        overlay.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        overlay.allowsEdgeAntialiasing = true
+        overlay.masksToBounds = false
+        hostLayer.addSublayer(overlay)
+        snapshotTransitionLayer = overlay
+
+        let yOffset: CGFloat = openingDetails ? -14 : 14
+        let finalPosition = CGPoint(x: overlay.position.x, y: overlay.position.y + yOffset)
+        let finalTransform = CATransform3DMakeScale(0.985, 0.985, 1)
+        let timing = CAMediaTimingFunction(controlPoints: 0.22, 0.78, 0.24, 1.0)
+
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = NSNumber(value: 1)
+        fade.toValue = NSNumber(value: 0)
+
+        let move = CABasicAnimation(keyPath: "position")
+        move.fromValue = NSValue(point: overlay.position)
+        move.toValue = NSValue(point: finalPosition)
+
+        let scale = CABasicAnimation(keyPath: "transform")
+        scale.fromValue = NSValue(caTransform3D: CATransform3DIdentity)
+        scale.toValue = NSValue(caTransform3D: finalTransform)
+
+        let group = CAAnimationGroup()
+        group.animations = [fade, move, scale]
+        group.duration = CFTimeInterval(transitionDuration)
+        group.timingFunction = timing
+        group.fillMode = .forwards
+        group.isRemovedOnCompletion = false
+
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self, weak overlay] in
+            guard let self else { return }
+            overlay?.removeFromSuperlayer()
+            if self.snapshotTransitionLayer === overlay {
+                self.snapshotTransitionLayer = nil
+            }
+            self.needsDisplay = true
+        }
+        overlay.opacity = 0
+        overlay.position = finalPosition
+        overlay.transform = finalTransform
+        overlay.add(group, forKey: "snapshot-page-transition")
+        CATransaction.commit()
     }
 
     private func syncDetailAnimations(with state: CodexUsageSnapshot, restart: Bool) {
@@ -1304,18 +1381,16 @@ final class DashboardView: NSView {
 
     private func startAnimation() {
         guard animationTimer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+        let frameInterval: CGFloat = 1.0 / 60.0
+        let timer = Timer(timeInterval: TimeInterval(frameInterval), repeats: true) { [weak self] _ in
             guard let self else { return }
             guard self.window?.isVisible == true else { return }
-            self.animationPhase += 1.0 / 30.0
-            if self.transitionProgress < 1 {
-                self.transitionProgress = min(1, self.transitionProgress + CGFloat(1.0 / 30.0) / self.transitionDuration)
-            }
+            self.animationPhase += frameInterval
             if self.detailRingProgress < 1 {
-                self.detailRingProgress = min(1, self.detailRingProgress + CGFloat(1.0 / 30.0) / self.detailRingDuration)
+                self.detailRingProgress = min(1, self.detailRingProgress + frameInterval / self.detailRingDuration)
             }
             if self.trendDrawProgress < 1 {
-                self.trendDrawProgress = min(1, self.trendDrawProgress + CGFloat(1.0 / 30.0) / self.trendDrawDuration)
+                self.trendDrawProgress = min(1, self.trendDrawProgress + frameInterval / self.trendDrawDuration)
             }
             self.needsDisplay = true
         }

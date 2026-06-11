@@ -144,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if animate {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.28
+                context.duration = 0.38
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 window.animator().setFrame(frame, display: true)
             } completionHandler: { [weak self] in
