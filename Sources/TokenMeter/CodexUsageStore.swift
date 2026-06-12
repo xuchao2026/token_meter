@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 final class CodexUsageStore {
@@ -10,6 +11,7 @@ final class CodexUsageStore {
     private let planTypeCache = CodexPlanTypeCache()
     private let refreshQueue = DispatchQueue(label: "local.token-meter.refresh", qos: .utility)
     private let automaticRefreshInterval: TimeInterval = 60
+    private let mouseIdleThreshold: TimeInterval = 2 * 60
     private var timer: Timer?
     private var cachedPlanType: String?
     private(set) var isRefreshing = false
@@ -63,16 +65,20 @@ final class CodexUsageStore {
 
     private func scheduleNextAutomaticRefresh(using snapshot: CodexUsageSnapshot) {
         timer?.invalidate()
-        let nextDate = nextAutomaticRefreshDate(using: snapshot)
-        let interval = max(1, nextDate.timeIntervalSinceNow)
+        let plan = nextAutomaticRefreshPlan(using: snapshot)
+        let interval = max(1, plan.date.timeIntervalSinceNow)
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
             guard let self else { return }
             self.timer = nil
+            if plan.reason == .regularCadence, !self.isMouseRecentlyActive() {
+                self.scheduleNextAutomaticRefresh(using: self.snapshot)
+                return
+            }
             self.refresh(isAutomatic: true)
         }
     }
 
-    private func nextAutomaticRefreshDate(using snapshot: CodexUsageSnapshot) -> Date {
+    private func nextAutomaticRefreshPlan(using snapshot: CodexUsageSnapshot) -> AutomaticRefreshPlan {
         let now = Date()
         let exhaustedResetDates = [
             resetDateIfExhausted(snapshot.primaryWindow),
@@ -80,14 +86,14 @@ final class CodexUsageStore {
         ].compactMap { $0 }
 
         guard !exhaustedResetDates.isEmpty else {
-            return now.addingTimeInterval(automaticRefreshInterval)
+            return AutomaticRefreshPlan(date: now.addingTimeInterval(automaticRefreshInterval), reason: .regularCadence)
         }
 
         let resetDate = exhaustedResetDates.min() ?? now.addingTimeInterval(automaticRefreshInterval)
         if resetDate <= now {
-            return now.addingTimeInterval(automaticRefreshInterval)
+            return AutomaticRefreshPlan(date: now.addingTimeInterval(automaticRefreshInterval), reason: .regularCadence)
         }
-        return resetDate.addingTimeInterval(1)
+        return AutomaticRefreshPlan(date: resetDate.addingTimeInterval(1), reason: .quotaReset)
     }
 
     private func resetDateIfExhausted(_ window: UsageWindow) -> Date? {
@@ -97,4 +103,35 @@ final class CodexUsageStore {
         }
         return window.resetsAt ?? Date().addingTimeInterval(automaticRefreshInterval)
     }
+
+    private func isMouseRecentlyActive() -> Bool {
+        recentMouseIdleSeconds() < mouseIdleThreshold
+    }
+
+    private func recentMouseIdleSeconds() -> TimeInterval {
+        let sourceState = CGEventSourceStateID.combinedSessionState
+        let eventTypes: [CGEventType] = [
+            .mouseMoved,
+            .leftMouseDown,
+            .rightMouseDown,
+            .otherMouseDown,
+            .leftMouseDragged,
+            .rightMouseDragged,
+            .otherMouseDragged,
+            .scrollWheel
+        ]
+        return eventTypes
+            .map { CGEventSource.secondsSinceLastEventType(sourceState, eventType: $0) }
+            .min() ?? TimeInterval.greatestFiniteMagnitude
+    }
+}
+
+private struct AutomaticRefreshPlan {
+    let date: Date
+    let reason: AutomaticRefreshReason
+}
+
+private enum AutomaticRefreshReason {
+    case regularCadence
+    case quotaReset
 }
