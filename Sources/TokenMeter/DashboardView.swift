@@ -28,6 +28,8 @@ final class DashboardView: NSView {
     private var animationTimer: Timer?
     private let transitionDuration: CGFloat = 0.38
     private weak var snapshotTransitionLayer: CALayer?
+    private var detailPageScaleProgress: CGFloat = 1
+    private var isDetailPageScaleTransitionActive = false
     private var detailRingProgress: CGFloat = 1
     private let detailRingDuration: CGFloat = 1.35
     private var trendDrawProgress: CGFloat = 1
@@ -144,6 +146,8 @@ final class DashboardView: NSView {
         isShowingDetails = false
         snapshotTransitionLayer?.removeFromSuperlayer()
         snapshotTransitionLayer = nil
+        detailPageScaleProgress = 1
+        isDetailPageScaleTransitionActive = false
         detailRingProgress = 1
         trendDrawProgress = 1
         needsDisplay = true
@@ -174,31 +178,57 @@ final class DashboardView: NSView {
             syncDetailAnimations(with: state, restart: false)
         }
 
-        drawChrome(in: root)
-        drawHeader(in: root, state: state)
-
-        drawContent(in: root, state: state, showingDetails: isShowingDetails)
+        drawPage(in: root, state: state)
         NSGraphicsContext.restoreGraphicsState()
     }
 
     private func setShowingDetails(_ showingDetails: Bool, animated: Bool) {
         guard isShowingDetails != showingDetails else { return }
-        let outgoingSnapshot = animated
-            ? makeContentSnapshot(showingDetails: isShowingDetails, state: store.snapshot)
+        let outgoingSnapshot = animated && !showingDetails
+            ? makePageSnapshot(showingDetails: isShowingDetails, state: store.snapshot)
             : nil
         isShowingDetails = showingDetails
         clearTrendHover()
         if showingDetails {
+            detailPageScaleProgress = animated ? 0 : 1
+            isDetailPageScaleTransitionActive = animated
             syncDetailAnimations(with: store.snapshot, restart: true)
         } else {
+            detailPageScaleProgress = 1
+            isDetailPageScaleTransitionActive = false
             detailRingProgress = 1
             trendDrawProgress = 1
         }
         onDetailModeChange?(showingDetails)
         needsDisplay = true
         if let outgoingSnapshot {
-            startSnapshotTransition(with: outgoingSnapshot, openingDetails: showingDetails)
+            startSnapshotTransition(with: outgoingSnapshot)
         }
+    }
+
+    private func drawPage(in root: CGRect, state: CodexUsageSnapshot) {
+        let shouldScalePage = isShowingDetails &&
+            isDetailPageScaleTransitionActive &&
+            detailPageScaleProgress < 1
+
+        NSGraphicsContext.saveGraphicsState()
+        if shouldScalePage {
+            let progress = smoothStep(detailPageScaleProgress)
+            let scale = 0.54 + (1 - 0.54) * progress
+            let alpha = 0.22 + 0.78 * progress
+            let anchor = CGPoint(x: root.maxX, y: root.minY)
+            let transform = NSAffineTransform()
+            transform.translateX(by: anchor.x, yBy: anchor.y)
+            transform.scaleX(by: scale, yBy: scale)
+            transform.translateX(by: -anchor.x, yBy: -anchor.y)
+            transform.concat()
+            NSGraphicsContext.current?.cgContext.setAlpha(alpha)
+        }
+
+        drawChrome(in: root)
+        drawHeader(in: root, state: state)
+        drawContent(in: root, state: state, showingDetails: isShowingDetails)
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func drawContent(in root: CGRect, state: CodexUsageSnapshot, showingDetails: Bool) {
@@ -209,12 +239,13 @@ final class DashboardView: NSView {
         }
     }
 
-    private func makeContentSnapshot(showingDetails: Bool, state: CodexUsageSnapshot) -> NSImage {
+    private func makePageSnapshot(showingDetails: Bool, state: CodexUsageSnapshot) -> NSImage {
         let size = showingDetails ? detailDesignSize : compactDesignSize
         let image = NSImage(size: size)
         let root = CGRect(origin: .zero, size: size)
 
         let savedRefreshButtonRect = refreshButtonRect
+        let savedPinButtonRect = pinButtonRect
         let savedHideButtonRect = hideButtonRect
         let savedCloseButtonRect = closeButtonRect
         let savedDetailButtonRect = detailButtonRect
@@ -224,10 +255,13 @@ final class DashboardView: NSView {
         NSGraphicsContext.current?.imageInterpolation = .high
         NSColor.clear.setFill()
         root.fill()
+        drawChrome(in: root)
+        drawHeader(in: root, state: state)
         drawContent(in: root, state: state, showingDetails: showingDetails)
         image.unlockFocus()
 
         refreshButtonRect = savedRefreshButtonRect
+        pinButtonRect = savedPinButtonRect
         hideButtonRect = savedHideButtonRect
         closeButtonRect = savedCloseButtonRect
         detailButtonRect = savedDetailButtonRect
@@ -236,7 +270,7 @@ final class DashboardView: NSView {
         return image
     }
 
-    private func startSnapshotTransition(with image: NSImage, openingDetails: Bool) {
+    private func startSnapshotTransition(with image: NSImage) {
         guard let hostLayer = layer,
               let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             return
@@ -256,7 +290,7 @@ final class DashboardView: NSView {
         hostLayer.addSublayer(overlay)
         snapshotTransitionLayer = overlay
 
-        let yOffset: CGFloat = openingDetails ? -14 : 14
+        let yOffset: CGFloat = 14
         let finalPosition = CGPoint(x: overlay.position.x, y: overlay.position.y + yOffset)
         let finalTransform = CATransform3DMakeScale(0.985, 0.985, 1)
         let timing = CAMediaTimingFunction(controlPoints: 0.22, 0.78, 0.24, 1.0)
@@ -1513,6 +1547,16 @@ final class DashboardView: NSView {
             guard let self else { return }
             guard self.window?.isVisible == true else { return }
             self.animationPhase += frameInterval
+            if self.isDetailPageScaleTransitionActive {
+                self.detailPageScaleProgress = min(
+                    1,
+                    self.detailPageScaleProgress + frameInterval / self.transitionDuration
+                )
+                if self.detailPageScaleProgress >= 1 {
+                    self.detailPageScaleProgress = 1
+                    self.isDetailPageScaleTransitionActive = false
+                }
+            }
             if self.detailRingProgress < 1 {
                 self.detailRingProgress = min(1, self.detailRingProgress + frameInterval / self.detailRingDuration)
             }
