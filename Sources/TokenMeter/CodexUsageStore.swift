@@ -11,7 +11,7 @@ final class CodexUsageStore {
     private let planTypeCache = CodexPlanTypeCache()
     private let refreshQueue = DispatchQueue(label: "local.token-meter.refresh", qos: .utility)
     private let automaticRefreshInterval: TimeInterval = 60
-    private let mouseIdleThreshold: TimeInterval = 2 * 60
+    private let mouseIdleThreshold: TimeInterval = 5 * 60
     private var timer: Timer?
     private var cachedPlanType: String?
     private(set) var isRefreshing = false
