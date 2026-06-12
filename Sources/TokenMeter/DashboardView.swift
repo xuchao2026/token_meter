@@ -754,7 +754,7 @@ final class DashboardView: NSView {
     private func drawTrendChart(in rect: CGRect, history: [DailyUsagePoint]) {
         trendHoverRegions = []
 
-        NSColor.white.withAlphaComponent(0.30).setFill()
+        NSColor.white.withAlphaComponent(0.36).setFill()
         NSBezierPath(roundedRect: rect, xRadius: 14, yRadius: 14).fill()
 
         guard !history.isEmpty else {
@@ -771,8 +771,8 @@ final class DashboardView: NSView {
         let maxTokens = max(history.map(\.totals.totalTokens).max() ?? 0, 1)
         let chartRect = CGRect(x: rect.minX + 18, y: rect.minY + 16, width: rect.width - 36, height: rect.height - 46)
         let baseline = chartRect.maxY
-        let accent = NSColor(calibratedRed: 0.36, green: 0.90, blue: 0.94, alpha: 1)
-        let currentAccent = NSColor(calibratedRed: 0.65, green: 0.55, blue: 1.0, alpha: 1)
+        let accent = NSColor(calibratedRed: 0.00, green: 0.62, blue: 0.78, alpha: 1)
+        let currentAccent = NSColor(calibratedRed: 0.24, green: 0.42, blue: 0.95, alpha: 1)
         let revealProgress = easedTrendDrawProgress()
 
         for lineIndex in 0...3 {
@@ -814,7 +814,7 @@ final class DashboardView: NSView {
             areaPath.line(to: CGPoint(x: visiblePoints[visiblePoints.count - 1].x, y: baseline))
             areaPath.line(to: CGPoint(x: visiblePoints[0].x, y: baseline))
             areaPath.close()
-            accent.withAlphaComponent(0.14).setFill()
+            accent.withAlphaComponent(0.18).setFill()
             areaPath.fill()
 
             let linePath = NSBezierPath()
@@ -823,8 +823,8 @@ final class DashboardView: NSView {
 
             NSGraphicsContext.saveGraphicsState()
             let shadow = NSShadow()
-            shadow.shadowColor = accent.withAlphaComponent(0.35)
-            shadow.shadowBlurRadius = 8
+            shadow.shadowColor = accent.withAlphaComponent(0.30)
+            shadow.shadowBlurRadius = 6
             shadow.shadowOffset = .zero
             shadow.set()
             accent.setStroke()
