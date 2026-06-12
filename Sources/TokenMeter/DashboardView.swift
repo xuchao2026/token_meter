@@ -459,14 +459,13 @@ final class DashboardView: NSView {
 
     private func drawHeader(in root: CGRect, state: CodexUsageSnapshot) {
         let status = overallQuotaStatus(for: state)
-        let outerInset: CGFloat = isShowingDetails ? 16 : 24
+        let outerInset: CGFloat = 24
         let leadingHeaderOffset: CGFloat = 12
         let headerLeadingX = root.minX + outerInset + leadingHeaderOffset
         let titleX = headerLeadingX + 50
-        let detailHeaderLift: CGFloat = isShowingDetails ? 6 : 0
-        let titleY = root.minY + (isShowingDetails ? 36 - detailHeaderLift : outerInset)
-        let statusY = isShowingDetails ? root.minY + 51 - detailHeaderLift : titleY + 10
-        let buttonY = root.minY + (isShowingDetails ? 45 - detailHeaderLift : outerInset)
+        let titleY = root.minY + outerInset
+        let statusY = titleY + 10
+        let buttonY = root.minY + outerInset
         let dotOuter = CGRect(x: headerLeadingX, y: statusY, width: 34, height: 34)
         drawStatusLight(in: dotOuter, color: status.color, animated: hasQuotaData(state))
 
@@ -518,13 +517,22 @@ final class DashboardView: NSView {
 
         let cardWidth: CGFloat = 322
         let cardX = root.maxX - compactInset - cardWidth
+        let cardHeight: CGFloat = 106
+        let sectionGap: CGFloat = 16
+        let primaryCardRect = CGRect(x: cardX, y: root.minY + 112, width: cardWidth, height: cardHeight)
+        let secondaryCardRect = CGRect(
+            x: cardX,
+            y: primaryCardRect.maxY + sectionGap,
+            width: cardWidth,
+            height: cardHeight
+        )
 
         drawInfoCard(
             title: "5小时窗口",
             resetTime: resetClock(state.primaryWindow.resetsAt, style: .hourMinute),
             percent: Formatters.remainingPercent(state.primaryWindow),
             remaining: resetDescription(state.primaryWindow.resetsAt),
-            in: CGRect(x: cardX, y: root.minY + 112, width: cardWidth, height: 106),
+            in: primaryCardRect,
             style: .shortDuration,
             tint: state.primaryWindow.remainingPercent == nil ? nil : status.color
         )
@@ -533,11 +541,11 @@ final class DashboardView: NSView {
             resetTime: resetClock(state.secondaryWindow.resetsAt, style: .monthDayHourMinute),
             percent: Formatters.remainingPercent(state.secondaryWindow),
             remaining: resetDescription(state.secondaryWindow.resetsAt),
-            in: CGRect(x: cardX, y: root.minY + 226, width: cardWidth, height: 106),
+            in: secondaryCardRect,
             style: .longDuration,
             tint: state.secondaryWindow.remainingPercent == nil ? nil : secondaryStatus.color
         )
-        detailButtonRect = CGRect(x: cardX, y: root.minY + 350, width: cardWidth, height: 56)
+        detailButtonRect = CGRect(x: cardX, y: secondaryCardRect.maxY + sectionGap, width: cardWidth, height: 56)
         drawDetailButton(title: "详情", in: detailButtonRect)
     }
 
@@ -545,11 +553,12 @@ final class DashboardView: NSView {
         let primaryStatus = quotaStatus(for: state.primaryWindow)
         let secondaryStatus = quotaStatus(for: state.secondaryWindow)
         let detailInset: CGFloat = 16
+        let sectionGap: CGFloat = 16
         let heroRect = CGRect(x: root.minX + detailInset, y: root.minY + 108, width: root.width - detailInset * 2, height: 250)
         drawDetailHero(in: heroRect, state: state)
 
         let cardGap: CGFloat = 12
-        let cardY = root.minY + 366
+        let cardY = heroRect.maxY + sectionGap
         let cardW = (root.width - detailInset * 2 - cardGap * 2) / 3
         let cardHeight: CGFloat = 116
         drawTokenCard(
@@ -574,8 +583,21 @@ final class DashboardView: NSView {
             in: CGRect(x: root.minX + detailInset + (cardW + cardGap) * 2, y: cardY, width: cardW, height: cardHeight)
         )
 
-        drawConsumptionBoard(in: CGRect(x: root.minX + detailInset, y: root.minY + 498, width: root.width - detailInset * 2, height: 160), state: state)
-        drawTrendBoard(in: CGRect(x: root.minX + detailInset, y: root.minY + 674, width: root.width - detailInset * 2, height: 198), state: state)
+        let consumptionRect = CGRect(
+            x: root.minX + detailInset,
+            y: cardY + cardHeight + sectionGap,
+            width: root.width - detailInset * 2,
+            height: 160
+        )
+        drawConsumptionBoard(in: consumptionRect, state: state)
+
+        let trendRect = CGRect(
+            x: root.minX + detailInset,
+            y: consumptionRect.maxY + sectionGap,
+            width: root.width - detailInset * 2,
+            height: 198
+        )
+        drawTrendBoard(in: trendRect, state: state)
     }
 
     private func drawDetailHero(in rect: CGRect, state: CodexUsageSnapshot) {
