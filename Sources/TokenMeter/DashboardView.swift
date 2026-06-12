@@ -26,8 +26,9 @@ final class DashboardView: NSView {
     }
     private var animationPhase: CGFloat = 0
     private var animationTimer: Timer?
-    private let transitionDuration: CGFloat = 0.38
     private weak var snapshotTransitionLayer: CALayer?
+    private weak var incomingTransitionLayer: CALayer?
+    private var hidesPageDuringTransition = false
     private var detailRingProgress: CGFloat = 1
     private let detailRingDuration: CGFloat = 1.35
     private var trendDrawProgress: CGFloat = 1
@@ -52,6 +53,7 @@ final class DashboardView: NSView {
     private let yellow = NSColor(calibratedRed: 0.90, green: 0.63, blue: 0.20, alpha: 1)
     private let green = NSColor(calibratedRed: 0.15, green: 0.72, blue: 0.38, alpha: 1)
     private let sevenDayStatColor = NSColor(calibratedRed: 0.00, green: 0.48, blue: 0.78, alpha: 1)
+    private let pinIconRotationDegrees: CGFloat = 220
     init(store: CodexUsageStore) {
         self.store = store
         super.init(frame: .zero)
@@ -84,7 +86,7 @@ final class DashboardView: NSView {
 
     override func layout() {
         super.layout()
-        snapshotTransitionLayer?.frame = bounds
+        updateTransitionLayerFrames()
     }
 
     override func updateTrackingAreas() {
@@ -144,6 +146,9 @@ final class DashboardView: NSView {
         isShowingDetails = false
         snapshotTransitionLayer?.removeFromSuperlayer()
         snapshotTransitionLayer = nil
+        incomingTransitionLayer?.removeFromSuperlayer()
+        incomingTransitionLayer = nil
+        hidesPageDuringTransition = false
         detailRingProgress = 1
         trendDrawProgress = 1
         needsDisplay = true
@@ -174,17 +179,16 @@ final class DashboardView: NSView {
             syncDetailAnimations(with: state, restart: false)
         }
 
-        drawChrome(in: root)
-        drawHeader(in: root, state: state)
-
-        drawContent(in: root, state: state, showingDetails: isShowingDetails)
+        if !hidesPageDuringTransition {
+            drawPage(in: root, state: state)
+        }
         NSGraphicsContext.restoreGraphicsState()
     }
 
     private func setShowingDetails(_ showingDetails: Bool, animated: Bool) {
         guard isShowingDetails != showingDetails else { return }
         let outgoingSnapshot = animated
-            ? makeContentSnapshot(showingDetails: isShowingDetails, state: store.snapshot)
+            ? makePageSnapshot(showingDetails: isShowingDetails, state: store.snapshot)
             : nil
         isShowingDetails = showingDetails
         clearTrendHover()
@@ -194,11 +198,29 @@ final class DashboardView: NSView {
             detailRingProgress = 1
             trendDrawProgress = 1
         }
-        onDetailModeChange?(showingDetails)
-        needsDisplay = true
-        if let outgoingSnapshot {
-            startSnapshotTransition(with: outgoingSnapshot, openingDetails: showingDetails)
+        let incomingSnapshot = animated && !showingDetails
+            ? makePageSnapshot(showingDetails: showingDetails, state: store.snapshot)
+            : nil
+        if showingDetails, let outgoingSnapshot {
+            startOutgoingFadeTransition(from: outgoingSnapshot, openingDetails: true)
+        } else if let outgoingSnapshot, let incomingSnapshot {
+            hidesPageDuringTransition = true
+            startControlCenterTransition(
+                from: outgoingSnapshot,
+                to: incomingSnapshot,
+                openingDetails: showingDetails
+            )
         }
+        needsDisplay = true
+        onDetailModeChange?(showingDetails)
+    }
+
+    private func drawPage(in root: CGRect, state: CodexUsageSnapshot) {
+        NSGraphicsContext.saveGraphicsState()
+        drawChrome(in: root)
+        drawHeader(in: root, state: state)
+        drawContent(in: root, state: state, showingDetails: isShowingDetails)
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func drawContent(in root: CGRect, state: CodexUsageSnapshot, showingDetails: Bool) {
@@ -209,12 +231,13 @@ final class DashboardView: NSView {
         }
     }
 
-    private func makeContentSnapshot(showingDetails: Bool, state: CodexUsageSnapshot) -> NSImage {
+    private func makePageSnapshot(showingDetails: Bool, state: CodexUsageSnapshot) -> NSImage {
         let size = showingDetails ? detailDesignSize : compactDesignSize
         let image = NSImage(size: size)
         let root = CGRect(origin: .zero, size: size)
 
         let savedRefreshButtonRect = refreshButtonRect
+        let savedPinButtonRect = pinButtonRect
         let savedHideButtonRect = hideButtonRect
         let savedCloseButtonRect = closeButtonRect
         let savedDetailButtonRect = detailButtonRect
@@ -224,10 +247,13 @@ final class DashboardView: NSView {
         NSGraphicsContext.current?.imageInterpolation = .high
         NSColor.clear.setFill()
         root.fill()
+        drawChrome(in: root)
+        drawHeader(in: root, state: state)
         drawContent(in: root, state: state, showingDetails: showingDetails)
         image.unlockFocus()
 
         refreshButtonRect = savedRefreshButtonRect
+        pinButtonRect = savedPinButtonRect
         hideButtonRect = savedHideButtonRect
         closeButtonRect = savedCloseButtonRect
         detailButtonRect = savedDetailButtonRect
@@ -236,63 +262,180 @@ final class DashboardView: NSView {
         return image
     }
 
-    private func startSnapshotTransition(with image: NSImage, openingDetails: Bool) {
+    private func updateTransitionLayerFrames() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let snapshotTransitionLayer {
+            snapshotTransitionLayer.bounds = CGRect(origin: .zero, size: bounds.size)
+            snapshotTransitionLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        }
+        if let incomingTransitionLayer {
+            incomingTransitionLayer.bounds = CGRect(origin: .zero, size: bounds.size)
+            incomingTransitionLayer.position = CGPoint(x: bounds.maxX, y: bounds.maxY)
+        }
+        CATransaction.commit()
+    }
+
+    private func startControlCenterTransition(from outgoingImage: NSImage, to incomingImage: NSImage, openingDetails: Bool) {
         guard let hostLayer = layer,
-              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+              let outgoingCGImage = outgoingImage.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let incomingCGImage = incomingImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            hidesPageDuringTransition = false
+            needsDisplay = true
             return
         }
 
         snapshotTransitionLayer?.removeFromSuperlayer()
+        incomingTransitionLayer?.removeFromSuperlayer()
 
-        let overlay = CALayer()
-        overlay.frame = bounds
-        overlay.contents = cgImage
-        overlay.contentsGravity = .resizeAspect
-        overlay.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        overlay.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        overlay.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        overlay.allowsEdgeAntialiasing = true
-        overlay.masksToBounds = false
-        hostLayer.addSublayer(overlay)
-        snapshotTransitionLayer = overlay
+        let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let outgoingLayer = CALayer()
+        outgoingLayer.bounds = CGRect(origin: .zero, size: bounds.size)
+        outgoingLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        outgoingLayer.contents = outgoingCGImage
+        outgoingLayer.contentsGravity = .resizeAspect
+        outgoingLayer.contentsScale = backingScale
+        outgoingLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        outgoingLayer.allowsEdgeAntialiasing = true
+        outgoingLayer.masksToBounds = true
+        outgoingLayer.cornerRadius = openingDetails ? 30 : 32
+        outgoingLayer.cornerCurve = .continuous
+        hostLayer.addSublayer(outgoingLayer)
+        snapshotTransitionLayer = outgoingLayer
 
-        let yOffset: CGFloat = openingDetails ? -14 : 14
-        let finalPosition = CGPoint(x: overlay.position.x, y: overlay.position.y + yOffset)
-        let finalTransform = CATransform3DMakeScale(0.985, 0.985, 1)
-        let timing = CAMediaTimingFunction(controlPoints: 0.22, 0.78, 0.24, 1.0)
+        let incomingLayer = CALayer()
+        incomingLayer.bounds = CGRect(origin: .zero, size: bounds.size)
+        incomingLayer.position = CGPoint(x: bounds.maxX, y: bounds.maxY)
+        incomingLayer.contents = incomingCGImage
+        incomingLayer.contentsGravity = .resizeAspect
+        incomingLayer.contentsScale = backingScale
+        incomingLayer.anchorPoint = CGPoint(x: 1, y: 1)
+        incomingLayer.allowsEdgeAntialiasing = true
+        incomingLayer.masksToBounds = true
+        incomingLayer.cornerRadius = openingDetails ? 32 : 30
+        incomingLayer.cornerCurve = .continuous
+        incomingLayer.opacity = 0
+        incomingLayer.transform = CATransform3DMakeScale(openingDetails ? 0.72 : 1.04, openingDetails ? 0.72 : 1.04, 1)
+        hostLayer.addSublayer(incomingLayer)
+        incomingTransitionLayer = incomingLayer
+
+        let timing = CAMediaTimingFunction(controlPoints: 0.18, 0.88, 0.20, 1.0)
+        let duration = CFTimeInterval(openingDetails ? 0.42 : 0.34)
+        let outgoingDuration = CFTimeInterval(openingDetails ? 0.09 : 0.08)
+
+        let outgoingFade = CABasicAnimation(keyPath: "opacity")
+        outgoingFade.fromValue = NSNumber(value: 1)
+        outgoingFade.toValue = NSNumber(value: 0)
+
+        let outgoingScale = CABasicAnimation(keyPath: "transform")
+        outgoingScale.fromValue = NSValue(caTransform3D: CATransform3DIdentity)
+        outgoingScale.toValue = NSValue(caTransform3D: CATransform3DMakeScale(openingDetails ? 0.992 : 1.01, openingDetails ? 0.992 : 1.01, 1))
+
+        let outgoingMove = CABasicAnimation(keyPath: "position")
+        outgoingMove.fromValue = NSValue(point: outgoingLayer.position)
+        outgoingMove.toValue = NSValue(
+            point: CGPoint(
+                x: outgoingLayer.position.x,
+                y: outgoingLayer.position.y + (openingDetails ? -3 : 4)
+            )
+        )
+
+        let outgoingGroup = CAAnimationGroup()
+        outgoingGroup.animations = [outgoingFade, outgoingScale, outgoingMove]
+        outgoingGroup.duration = outgoingDuration
+        outgoingGroup.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        outgoingGroup.fillMode = .forwards
+        outgoingGroup.isRemovedOnCompletion = false
+
+        let incomingFade = CABasicAnimation(keyPath: "opacity")
+        incomingFade.fromValue = NSNumber(value: 0)
+        incomingFade.toValue = NSNumber(value: 1)
+        incomingFade.duration = CFTimeInterval(openingDetails ? 0.16 : 0.12)
+        incomingFade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        incomingFade.fillMode = .forwards
+        incomingFade.isRemovedOnCompletion = false
+
+        let incomingScale = CABasicAnimation(keyPath: "transform")
+        incomingScale.fromValue = NSValue(caTransform3D: incomingLayer.transform)
+        incomingScale.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+        incomingScale.duration = duration
+        incomingScale.timingFunction = timing
+        incomingScale.fillMode = .forwards
+        incomingScale.isRemovedOnCompletion = false
+
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self, weak outgoingLayer, weak incomingLayer] in
+            guard let self else { return }
+            outgoingLayer?.removeFromSuperlayer()
+            incomingLayer?.removeFromSuperlayer()
+            if self.snapshotTransitionLayer === outgoingLayer {
+                self.snapshotTransitionLayer = nil
+            }
+            if self.incomingTransitionLayer === incomingLayer {
+                self.incomingTransitionLayer = nil
+            }
+            self.hidesPageDuringTransition = false
+            self.needsDisplay = true
+        }
+        outgoingLayer.opacity = 0
+        outgoingLayer.transform = CATransform3DMakeScale(openingDetails ? 0.992 : 1.01, openingDetails ? 0.992 : 1.01, 1)
+        outgoingLayer.position = CGPoint(
+            x: outgoingLayer.position.x,
+            y: outgoingLayer.position.y + (openingDetails ? -3 : 4)
+        )
+        incomingLayer.opacity = 1
+        incomingLayer.transform = CATransform3DIdentity
+        outgoingLayer.add(outgoingGroup, forKey: "control-center-outgoing")
+        incomingLayer.add(incomingFade, forKey: "control-center-incoming-fade")
+        incomingLayer.add(incomingScale, forKey: "control-center-incoming-scale")
+        CATransaction.commit()
+    }
+
+    private func startOutgoingFadeTransition(from image: NSImage, openingDetails: Bool) {
+        guard let hostLayer = layer,
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            needsDisplay = true
+            return
+        }
+
+        snapshotTransitionLayer?.removeFromSuperlayer()
+        incomingTransitionLayer?.removeFromSuperlayer()
+        incomingTransitionLayer = nil
+        hidesPageDuringTransition = false
+
+        let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let outgoingLayer = CALayer()
+        outgoingLayer.bounds = CGRect(origin: .zero, size: bounds.size)
+        outgoingLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        outgoingLayer.contents = cgImage
+        outgoingLayer.contentsGravity = .resizeAspect
+        outgoingLayer.contentsScale = backingScale
+        outgoingLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        outgoingLayer.allowsEdgeAntialiasing = true
+        outgoingLayer.masksToBounds = true
+        outgoingLayer.cornerRadius = openingDetails ? 30 : 32
+        outgoingLayer.cornerCurve = .continuous
+        hostLayer.addSublayer(outgoingLayer)
+        snapshotTransitionLayer = outgoingLayer
 
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = NSNumber(value: 1)
         fade.toValue = NSNumber(value: 0)
-
-        let move = CABasicAnimation(keyPath: "position")
-        move.fromValue = NSValue(point: overlay.position)
-        move.toValue = NSValue(point: finalPosition)
-
-        let scale = CABasicAnimation(keyPath: "transform")
-        scale.fromValue = NSValue(caTransform3D: CATransform3DIdentity)
-        scale.toValue = NSValue(caTransform3D: finalTransform)
-
-        let group = CAAnimationGroup()
-        group.animations = [fade, move, scale]
-        group.duration = CFTimeInterval(transitionDuration)
-        group.timingFunction = timing
-        group.fillMode = .forwards
-        group.isRemovedOnCompletion = false
+        fade.duration = 0.07
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        fade.fillMode = .forwards
+        fade.isRemovedOnCompletion = false
 
         CATransaction.begin()
-        CATransaction.setCompletionBlock { [weak self, weak overlay] in
-            guard let self else { return }
-            overlay?.removeFromSuperlayer()
-            if self.snapshotTransitionLayer === overlay {
-                self.snapshotTransitionLayer = nil
+        CATransaction.setCompletionBlock { [weak self, weak outgoingLayer] in
+            outgoingLayer?.removeFromSuperlayer()
+            if self?.snapshotTransitionLayer === outgoingLayer {
+                self?.snapshotTransitionLayer = nil
             }
-            self.needsDisplay = true
+            self?.needsDisplay = true
         }
-        overlay.opacity = 0
-        overlay.position = finalPosition
-        overlay.transform = finalTransform
-        overlay.add(group, forKey: "snapshot-page-transition")
+        outgoingLayer.opacity = 0
+        outgoingLayer.add(fade, forKey: "quick-outgoing-fade")
         CATransaction.commit()
     }
 
@@ -425,14 +568,13 @@ final class DashboardView: NSView {
 
     private func drawHeader(in root: CGRect, state: CodexUsageSnapshot) {
         let status = overallQuotaStatus(for: state)
-        let outerInset: CGFloat = isShowingDetails ? 16 : 24
+        let outerInset: CGFloat = 24
         let leadingHeaderOffset: CGFloat = 12
         let headerLeadingX = root.minX + outerInset + leadingHeaderOffset
         let titleX = headerLeadingX + 50
-        let detailHeaderLift: CGFloat = isShowingDetails ? 6 : 0
-        let titleY = root.minY + (isShowingDetails ? 36 - detailHeaderLift : outerInset)
-        let statusY = isShowingDetails ? root.minY + 51 - detailHeaderLift : titleY + 10
-        let buttonY = root.minY + (isShowingDetails ? 45 - detailHeaderLift : outerInset)
+        let titleY = root.minY + outerInset
+        let statusY = titleY + 10
+        let buttonY = root.minY + outerInset
         let dotOuter = CGRect(x: headerLeadingX, y: statusY, width: 34, height: 34)
         drawStatusLight(in: dotOuter, color: status.color, animated: hasQuotaData(state))
 
@@ -484,13 +626,22 @@ final class DashboardView: NSView {
 
         let cardWidth: CGFloat = 322
         let cardX = root.maxX - compactInset - cardWidth
+        let cardHeight: CGFloat = 106
+        let sectionGap: CGFloat = 16
+        let primaryCardRect = CGRect(x: cardX, y: root.minY + 112, width: cardWidth, height: cardHeight)
+        let secondaryCardRect = CGRect(
+            x: cardX,
+            y: primaryCardRect.maxY + sectionGap,
+            width: cardWidth,
+            height: cardHeight
+        )
 
         drawInfoCard(
             title: "5小时窗口",
             resetTime: resetClock(state.primaryWindow.resetsAt, style: .hourMinute),
             percent: Formatters.remainingPercent(state.primaryWindow),
             remaining: resetDescription(state.primaryWindow.resetsAt),
-            in: CGRect(x: cardX, y: root.minY + 112, width: cardWidth, height: 106),
+            in: primaryCardRect,
             style: .shortDuration,
             tint: state.primaryWindow.remainingPercent == nil ? nil : status.color
         )
@@ -499,11 +650,11 @@ final class DashboardView: NSView {
             resetTime: resetClock(state.secondaryWindow.resetsAt, style: .monthDayHourMinute),
             percent: Formatters.remainingPercent(state.secondaryWindow),
             remaining: resetDescription(state.secondaryWindow.resetsAt),
-            in: CGRect(x: cardX, y: root.minY + 226, width: cardWidth, height: 106),
+            in: secondaryCardRect,
             style: .longDuration,
             tint: state.secondaryWindow.remainingPercent == nil ? nil : secondaryStatus.color
         )
-        detailButtonRect = CGRect(x: cardX, y: root.minY + 350, width: cardWidth, height: 56)
+        detailButtonRect = CGRect(x: cardX, y: secondaryCardRect.maxY + sectionGap, width: cardWidth, height: 56)
         drawDetailButton(title: "详情", in: detailButtonRect)
     }
 
@@ -511,11 +662,12 @@ final class DashboardView: NSView {
         let primaryStatus = quotaStatus(for: state.primaryWindow)
         let secondaryStatus = quotaStatus(for: state.secondaryWindow)
         let detailInset: CGFloat = 16
+        let sectionGap: CGFloat = 16
         let heroRect = CGRect(x: root.minX + detailInset, y: root.minY + 108, width: root.width - detailInset * 2, height: 250)
         drawDetailHero(in: heroRect, state: state)
 
         let cardGap: CGFloat = 12
-        let cardY = root.minY + 366
+        let cardY = heroRect.maxY + sectionGap
         let cardW = (root.width - detailInset * 2 - cardGap * 2) / 3
         let cardHeight: CGFloat = 116
         drawTokenCard(
@@ -540,8 +692,21 @@ final class DashboardView: NSView {
             in: CGRect(x: root.minX + detailInset + (cardW + cardGap) * 2, y: cardY, width: cardW, height: cardHeight)
         )
 
-        drawConsumptionBoard(in: CGRect(x: root.minX + detailInset, y: root.minY + 498, width: root.width - detailInset * 2, height: 160), state: state)
-        drawTrendBoard(in: CGRect(x: root.minX + detailInset, y: root.minY + 674, width: root.width - detailInset * 2, height: 198), state: state)
+        let consumptionRect = CGRect(
+            x: root.minX + detailInset,
+            y: cardY + cardHeight + sectionGap,
+            width: root.width - detailInset * 2,
+            height: 160
+        )
+        drawConsumptionBoard(in: consumptionRect, state: state)
+
+        let trendRect = CGRect(
+            x: root.minX + detailInset,
+            y: consumptionRect.maxY + sectionGap,
+            width: root.width - detailInset * 2,
+            height: 198
+        )
+        drawTrendBoard(in: trendRect, state: state)
     }
 
     private func drawDetailHero(in rect: CGRect, state: CodexUsageSnapshot) {
@@ -754,7 +919,7 @@ final class DashboardView: NSView {
     private func drawTrendChart(in rect: CGRect, history: [DailyUsagePoint]) {
         trendHoverRegions = []
 
-        NSColor.white.withAlphaComponent(0.30).setFill()
+        NSColor.white.withAlphaComponent(0.36).setFill()
         NSBezierPath(roundedRect: rect, xRadius: 14, yRadius: 14).fill()
 
         guard !history.isEmpty else {
@@ -771,8 +936,8 @@ final class DashboardView: NSView {
         let maxTokens = max(history.map(\.totals.totalTokens).max() ?? 0, 1)
         let chartRect = CGRect(x: rect.minX + 18, y: rect.minY + 16, width: rect.width - 36, height: rect.height - 46)
         let baseline = chartRect.maxY
-        let accent = NSColor(calibratedRed: 0.36, green: 0.90, blue: 0.94, alpha: 1)
-        let currentAccent = NSColor(calibratedRed: 0.65, green: 0.55, blue: 1.0, alpha: 1)
+        let accent = NSColor(calibratedRed: 0.00, green: 0.62, blue: 0.78, alpha: 1)
+        let currentAccent = NSColor(calibratedRed: 0.24, green: 0.42, blue: 0.95, alpha: 1)
         let revealProgress = easedTrendDrawProgress()
 
         for lineIndex in 0...3 {
@@ -814,7 +979,7 @@ final class DashboardView: NSView {
             areaPath.line(to: CGPoint(x: visiblePoints[visiblePoints.count - 1].x, y: baseline))
             areaPath.line(to: CGPoint(x: visiblePoints[0].x, y: baseline))
             areaPath.close()
-            accent.withAlphaComponent(0.14).setFill()
+            accent.withAlphaComponent(0.18).setFill()
             areaPath.fill()
 
             let linePath = NSBezierPath()
@@ -823,8 +988,8 @@ final class DashboardView: NSView {
 
             NSGraphicsContext.saveGraphicsState()
             let shadow = NSShadow()
-            shadow.shadowColor = accent.withAlphaComponent(0.35)
-            shadow.shadowBlurRadius = 8
+            shadow.shadowColor = accent.withAlphaComponent(0.30)
+            shadow.shadowBlurRadius = 6
             shadow.shadowOffset = .zero
             shadow.set()
             accent.setStroke()
@@ -1261,7 +1426,7 @@ final class DashboardView: NSView {
         case .pin:
             let symbolName = active ? "pin.fill" : "pin"
             let color = active ? green.withAlphaComponent(0.96) : textColor.withAlphaComponent(0.92)
-            if drawSystemSymbol(symbolName, in: rect, spinning: false, color: color, rotationDegrees: 180) {
+            if drawSystemSymbol(symbolName, in: rect, spinning: false, color: color, rotationDegrees: pinIconRotationDegrees) {
                 return
             }
             drawPinFallbackIcon(in: rect, active: active)
@@ -1422,7 +1587,7 @@ final class DashboardView: NSView {
         pinPath.line(to: CGPoint(x: center.x - 4, y: center.y + 2))
         pinPath.line(to: CGPoint(x: center.x, y: center.y + 17))
         pinPath.transform(using: AffineTransform(translationByX: -center.x, byY: -center.y))
-        pinPath.transform(using: AffineTransform(rotationByDegrees: 180))
+        pinPath.transform(using: AffineTransform(rotationByDegrees: pinIconRotationDegrees))
         pinPath.transform(using: AffineTransform(translationByX: center.x, byY: center.y))
 
         (active ? green.withAlphaComponent(0.96) : textColor.withAlphaComponent(0.92)).setStroke()
@@ -1498,6 +1663,12 @@ final class DashboardView: NSView {
         let minutes = totalMinutes % 60
 
         if days > 0 {
+            if hours == 0, minutes > 0 {
+                return "\(days)天\(minutes)分钟"
+            }
+            if hours == 0 {
+                return "\(days)天"
+            }
             return "\(days)天\(hours)小时"
         }
         if hours > 0 {

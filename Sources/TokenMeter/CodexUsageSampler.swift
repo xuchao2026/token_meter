@@ -185,7 +185,10 @@ struct CodexUsageSnapshot {
             bucketsByDay[bucket.dayID, default: 0] += bucket.tokens
         }
         if today.totalTokens > 0 {
-            bucketsByDay[todayID] = today.totalTokens
+            bucketsByDay[todayID] = max(bucketsByDay[todayID] ?? 0, today.totalTokens)
+        }
+        if yesterday.totalTokens > 0 {
+            bucketsByDay[yesterdayID] = max(bucketsByDay[yesterdayID] ?? 0, yesterday.totalTokens)
         }
 
         func totals(_ tokens: UInt64) -> TokenTotals {

@@ -52,18 +52,16 @@ final class CodexAccountUsageCache {
         let now = Date()
         let todayID = dayFormatter.string(from: now)
         let cachedPayload = loadPayload()
-
-        if cachedPayload?.cacheDayID == todayID {
-            return cachedPayload?.snapshot
-        }
+        let cachedSnapshot = cachedPayload?.snapshot
 
         if shouldAttemptFetch(for: todayID, now: now),
            let freshSnapshot = fetch() {
-            save(snapshot: freshSnapshot, cacheDayID: todayID)
-            return freshSnapshot
+            let mergedSnapshot = merge(cached: cachedSnapshot, fresh: freshSnapshot)
+            save(snapshot: mergedSnapshot, cacheDayID: todayID)
+            return mergedSnapshot
         }
 
-        return cachedPayload?.snapshot
+        return cachedSnapshot
     }
 
     private func shouldAttemptFetch(for todayID: String, now: Date) -> Bool {
@@ -94,6 +92,32 @@ final class CodexAccountUsageCache {
             attributes: nil
         )
         try? data.write(to: cacheURL, options: [.atomic])
+    }
+
+    private func merge(cached: CodexAccountUsageSnapshot?, fresh: CodexAccountUsageSnapshot) -> CodexAccountUsageSnapshot {
+        guard let cached else { return fresh }
+
+        var bucketsByDay: [String: UInt64] = [:]
+        for bucket in cached.dailyBuckets {
+            bucketsByDay[bucket.dayID] = max(bucketsByDay[bucket.dayID] ?? 0, bucket.tokens)
+        }
+        for bucket in fresh.dailyBuckets {
+            bucketsByDay[bucket.dayID] = max(bucketsByDay[bucket.dayID] ?? 0, bucket.tokens)
+        }
+
+        let buckets = bucketsByDay
+            .map { AccountUsageDailyBucket(dayID: $0.key, tokens: $0.value) }
+            .sorted { $0.dayID < $1.dayID }
+
+        return CodexAccountUsageSnapshot(
+            lifetimeTokens: max(cached.lifetimeTokens, fresh.lifetimeTokens),
+            peakDailyTokens: max(cached.peakDailyTokens, fresh.peakDailyTokens),
+            longestRunningTurnSec: max(cached.longestRunningTurnSec, fresh.longestRunningTurnSec),
+            currentStreakDays: fresh.currentStreakDays > 0 ? fresh.currentStreakDays : cached.currentStreakDays,
+            longestStreakDays: max(cached.longestStreakDays, fresh.longestStreakDays),
+            dailyBuckets: buckets,
+            fetchedAt: fresh.fetchedAt
+        )
     }
 }
 
