@@ -1662,6 +1662,12 @@ final class DashboardView: NSView {
         let minutes = totalMinutes % 60
 
         if days > 0 {
+            if hours == 0, minutes > 0 {
+                return "\(days)天\(minutes)分钟"
+            }
+            if hours == 0 {
+                return "\(days)天"
+            }
             return "\(days)天\(hours)小时"
         }
         if hours > 0 {
