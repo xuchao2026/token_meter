@@ -53,6 +53,7 @@ final class DashboardView: NSView {
     private let yellow = NSColor(calibratedRed: 0.90, green: 0.63, blue: 0.20, alpha: 1)
     private let green = NSColor(calibratedRed: 0.15, green: 0.72, blue: 0.38, alpha: 1)
     private let sevenDayStatColor = NSColor(calibratedRed: 0.00, green: 0.48, blue: 0.78, alpha: 1)
+    private let pinIconRotationDegrees: CGFloat = 220
     init(store: CodexUsageStore) {
         self.store = store
         super.init(frame: .zero)
@@ -1425,7 +1426,7 @@ final class DashboardView: NSView {
         case .pin:
             let symbolName = active ? "pin.fill" : "pin"
             let color = active ? green.withAlphaComponent(0.96) : textColor.withAlphaComponent(0.92)
-            if drawSystemSymbol(symbolName, in: rect, spinning: false, color: color, rotationDegrees: 180) {
+            if drawSystemSymbol(symbolName, in: rect, spinning: false, color: color, rotationDegrees: pinIconRotationDegrees) {
                 return
             }
             drawPinFallbackIcon(in: rect, active: active)
@@ -1586,7 +1587,7 @@ final class DashboardView: NSView {
         pinPath.line(to: CGPoint(x: center.x - 4, y: center.y + 2))
         pinPath.line(to: CGPoint(x: center.x, y: center.y + 17))
         pinPath.transform(using: AffineTransform(translationByX: -center.x, byY: -center.y))
-        pinPath.transform(using: AffineTransform(rotationByDegrees: 180))
+        pinPath.transform(using: AffineTransform(rotationByDegrees: pinIconRotationDegrees))
         pinPath.transform(using: AffineTransform(translationByX: center.x, byY: center.y))
 
         (active ? green.withAlphaComponent(0.96) : textColor.withAlphaComponent(0.92)).setStroke()
