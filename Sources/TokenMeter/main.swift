@@ -160,8 +160,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if animate {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.38
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                context.duration = showingDetails ? 0.42 : 0.34
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.18, 0.88, 0.20, 1.0)
                 window.animator().setFrame(frame, display: true)
             } completionHandler: { [weak self] in
                 self?.window.invalidateShadow()

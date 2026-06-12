@@ -26,10 +26,9 @@ final class DashboardView: NSView {
     }
     private var animationPhase: CGFloat = 0
     private var animationTimer: Timer?
-    private let transitionDuration: CGFloat = 0.38
     private weak var snapshotTransitionLayer: CALayer?
-    private var detailPageScaleProgress: CGFloat = 1
-    private var isDetailPageScaleTransitionActive = false
+    private weak var incomingTransitionLayer: CALayer?
+    private var hidesPageDuringTransition = false
     private var detailRingProgress: CGFloat = 1
     private let detailRingDuration: CGFloat = 1.35
     private var trendDrawProgress: CGFloat = 1
@@ -86,7 +85,7 @@ final class DashboardView: NSView {
 
     override func layout() {
         super.layout()
-        snapshotTransitionLayer?.frame = bounds
+        updateTransitionLayerFrames()
     }
 
     override func updateTrackingAreas() {
@@ -146,8 +145,9 @@ final class DashboardView: NSView {
         isShowingDetails = false
         snapshotTransitionLayer?.removeFromSuperlayer()
         snapshotTransitionLayer = nil
-        detailPageScaleProgress = 1
-        isDetailPageScaleTransitionActive = false
+        incomingTransitionLayer?.removeFromSuperlayer()
+        incomingTransitionLayer = nil
+        hidesPageDuringTransition = false
         detailRingProgress = 1
         trendDrawProgress = 1
         needsDisplay = true
@@ -178,53 +178,44 @@ final class DashboardView: NSView {
             syncDetailAnimations(with: state, restart: false)
         }
 
-        drawPage(in: root, state: state)
+        if !hidesPageDuringTransition {
+            drawPage(in: root, state: state)
+        }
         NSGraphicsContext.restoreGraphicsState()
     }
 
     private func setShowingDetails(_ showingDetails: Bool, animated: Bool) {
         guard isShowingDetails != showingDetails else { return }
-        let outgoingSnapshot = animated && !showingDetails
+        let outgoingSnapshot = animated
             ? makePageSnapshot(showingDetails: isShowingDetails, state: store.snapshot)
             : nil
         isShowingDetails = showingDetails
         clearTrendHover()
         if showingDetails {
-            detailPageScaleProgress = animated ? 0 : 1
-            isDetailPageScaleTransitionActive = animated
             syncDetailAnimations(with: store.snapshot, restart: true)
         } else {
-            detailPageScaleProgress = 1
-            isDetailPageScaleTransitionActive = false
             detailRingProgress = 1
             trendDrawProgress = 1
         }
-        onDetailModeChange?(showingDetails)
-        needsDisplay = true
-        if let outgoingSnapshot {
-            startSnapshotTransition(with: outgoingSnapshot)
+        let incomingSnapshot = animated && !showingDetails
+            ? makePageSnapshot(showingDetails: showingDetails, state: store.snapshot)
+            : nil
+        if showingDetails, let outgoingSnapshot {
+            startOutgoingFadeTransition(from: outgoingSnapshot, openingDetails: true)
+        } else if let outgoingSnapshot, let incomingSnapshot {
+            hidesPageDuringTransition = true
+            startControlCenterTransition(
+                from: outgoingSnapshot,
+                to: incomingSnapshot,
+                openingDetails: showingDetails
+            )
         }
+        needsDisplay = true
+        onDetailModeChange?(showingDetails)
     }
 
     private func drawPage(in root: CGRect, state: CodexUsageSnapshot) {
-        let shouldScalePage = isShowingDetails &&
-            isDetailPageScaleTransitionActive &&
-            detailPageScaleProgress < 1
-
         NSGraphicsContext.saveGraphicsState()
-        if shouldScalePage {
-            let progress = smoothStep(detailPageScaleProgress)
-            let scale = 0.54 + (1 - 0.54) * progress
-            let alpha = 0.22 + 0.78 * progress
-            let anchor = CGPoint(x: root.maxX, y: root.minY)
-            let transform = NSAffineTransform()
-            transform.translateX(by: anchor.x, yBy: anchor.y)
-            transform.scaleX(by: scale, yBy: scale)
-            transform.translateX(by: -anchor.x, yBy: -anchor.y)
-            transform.concat()
-            NSGraphicsContext.current?.cgContext.setAlpha(alpha)
-        }
-
         drawChrome(in: root)
         drawHeader(in: root, state: state)
         drawContent(in: root, state: state, showingDetails: isShowingDetails)
@@ -270,63 +261,180 @@ final class DashboardView: NSView {
         return image
     }
 
-    private func startSnapshotTransition(with image: NSImage) {
+    private func updateTransitionLayerFrames() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let snapshotTransitionLayer {
+            snapshotTransitionLayer.bounds = CGRect(origin: .zero, size: bounds.size)
+            snapshotTransitionLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        }
+        if let incomingTransitionLayer {
+            incomingTransitionLayer.bounds = CGRect(origin: .zero, size: bounds.size)
+            incomingTransitionLayer.position = CGPoint(x: bounds.maxX, y: bounds.maxY)
+        }
+        CATransaction.commit()
+    }
+
+    private func startControlCenterTransition(from outgoingImage: NSImage, to incomingImage: NSImage, openingDetails: Bool) {
         guard let hostLayer = layer,
-              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+              let outgoingCGImage = outgoingImage.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let incomingCGImage = incomingImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            hidesPageDuringTransition = false
+            needsDisplay = true
             return
         }
 
         snapshotTransitionLayer?.removeFromSuperlayer()
+        incomingTransitionLayer?.removeFromSuperlayer()
 
-        let overlay = CALayer()
-        overlay.frame = bounds
-        overlay.contents = cgImage
-        overlay.contentsGravity = .resizeAspect
-        overlay.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        overlay.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        overlay.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        overlay.allowsEdgeAntialiasing = true
-        overlay.masksToBounds = false
-        hostLayer.addSublayer(overlay)
-        snapshotTransitionLayer = overlay
+        let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let outgoingLayer = CALayer()
+        outgoingLayer.bounds = CGRect(origin: .zero, size: bounds.size)
+        outgoingLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        outgoingLayer.contents = outgoingCGImage
+        outgoingLayer.contentsGravity = .resizeAspect
+        outgoingLayer.contentsScale = backingScale
+        outgoingLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        outgoingLayer.allowsEdgeAntialiasing = true
+        outgoingLayer.masksToBounds = true
+        outgoingLayer.cornerRadius = openingDetails ? 30 : 32
+        outgoingLayer.cornerCurve = .continuous
+        hostLayer.addSublayer(outgoingLayer)
+        snapshotTransitionLayer = outgoingLayer
 
-        let yOffset: CGFloat = 14
-        let finalPosition = CGPoint(x: overlay.position.x, y: overlay.position.y + yOffset)
-        let finalTransform = CATransform3DMakeScale(0.985, 0.985, 1)
-        let timing = CAMediaTimingFunction(controlPoints: 0.22, 0.78, 0.24, 1.0)
+        let incomingLayer = CALayer()
+        incomingLayer.bounds = CGRect(origin: .zero, size: bounds.size)
+        incomingLayer.position = CGPoint(x: bounds.maxX, y: bounds.maxY)
+        incomingLayer.contents = incomingCGImage
+        incomingLayer.contentsGravity = .resizeAspect
+        incomingLayer.contentsScale = backingScale
+        incomingLayer.anchorPoint = CGPoint(x: 1, y: 1)
+        incomingLayer.allowsEdgeAntialiasing = true
+        incomingLayer.masksToBounds = true
+        incomingLayer.cornerRadius = openingDetails ? 32 : 30
+        incomingLayer.cornerCurve = .continuous
+        incomingLayer.opacity = 0
+        incomingLayer.transform = CATransform3DMakeScale(openingDetails ? 0.72 : 1.04, openingDetails ? 0.72 : 1.04, 1)
+        hostLayer.addSublayer(incomingLayer)
+        incomingTransitionLayer = incomingLayer
+
+        let timing = CAMediaTimingFunction(controlPoints: 0.18, 0.88, 0.20, 1.0)
+        let duration = CFTimeInterval(openingDetails ? 0.42 : 0.34)
+        let outgoingDuration = CFTimeInterval(openingDetails ? 0.09 : 0.08)
+
+        let outgoingFade = CABasicAnimation(keyPath: "opacity")
+        outgoingFade.fromValue = NSNumber(value: 1)
+        outgoingFade.toValue = NSNumber(value: 0)
+
+        let outgoingScale = CABasicAnimation(keyPath: "transform")
+        outgoingScale.fromValue = NSValue(caTransform3D: CATransform3DIdentity)
+        outgoingScale.toValue = NSValue(caTransform3D: CATransform3DMakeScale(openingDetails ? 0.992 : 1.01, openingDetails ? 0.992 : 1.01, 1))
+
+        let outgoingMove = CABasicAnimation(keyPath: "position")
+        outgoingMove.fromValue = NSValue(point: outgoingLayer.position)
+        outgoingMove.toValue = NSValue(
+            point: CGPoint(
+                x: outgoingLayer.position.x,
+                y: outgoingLayer.position.y + (openingDetails ? -3 : 4)
+            )
+        )
+
+        let outgoingGroup = CAAnimationGroup()
+        outgoingGroup.animations = [outgoingFade, outgoingScale, outgoingMove]
+        outgoingGroup.duration = outgoingDuration
+        outgoingGroup.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        outgoingGroup.fillMode = .forwards
+        outgoingGroup.isRemovedOnCompletion = false
+
+        let incomingFade = CABasicAnimation(keyPath: "opacity")
+        incomingFade.fromValue = NSNumber(value: 0)
+        incomingFade.toValue = NSNumber(value: 1)
+        incomingFade.duration = CFTimeInterval(openingDetails ? 0.16 : 0.12)
+        incomingFade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        incomingFade.fillMode = .forwards
+        incomingFade.isRemovedOnCompletion = false
+
+        let incomingScale = CABasicAnimation(keyPath: "transform")
+        incomingScale.fromValue = NSValue(caTransform3D: incomingLayer.transform)
+        incomingScale.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+        incomingScale.duration = duration
+        incomingScale.timingFunction = timing
+        incomingScale.fillMode = .forwards
+        incomingScale.isRemovedOnCompletion = false
+
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self, weak outgoingLayer, weak incomingLayer] in
+            guard let self else { return }
+            outgoingLayer?.removeFromSuperlayer()
+            incomingLayer?.removeFromSuperlayer()
+            if self.snapshotTransitionLayer === outgoingLayer {
+                self.snapshotTransitionLayer = nil
+            }
+            if self.incomingTransitionLayer === incomingLayer {
+                self.incomingTransitionLayer = nil
+            }
+            self.hidesPageDuringTransition = false
+            self.needsDisplay = true
+        }
+        outgoingLayer.opacity = 0
+        outgoingLayer.transform = CATransform3DMakeScale(openingDetails ? 0.992 : 1.01, openingDetails ? 0.992 : 1.01, 1)
+        outgoingLayer.position = CGPoint(
+            x: outgoingLayer.position.x,
+            y: outgoingLayer.position.y + (openingDetails ? -3 : 4)
+        )
+        incomingLayer.opacity = 1
+        incomingLayer.transform = CATransform3DIdentity
+        outgoingLayer.add(outgoingGroup, forKey: "control-center-outgoing")
+        incomingLayer.add(incomingFade, forKey: "control-center-incoming-fade")
+        incomingLayer.add(incomingScale, forKey: "control-center-incoming-scale")
+        CATransaction.commit()
+    }
+
+    private func startOutgoingFadeTransition(from image: NSImage, openingDetails: Bool) {
+        guard let hostLayer = layer,
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            needsDisplay = true
+            return
+        }
+
+        snapshotTransitionLayer?.removeFromSuperlayer()
+        incomingTransitionLayer?.removeFromSuperlayer()
+        incomingTransitionLayer = nil
+        hidesPageDuringTransition = false
+
+        let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let outgoingLayer = CALayer()
+        outgoingLayer.bounds = CGRect(origin: .zero, size: bounds.size)
+        outgoingLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        outgoingLayer.contents = cgImage
+        outgoingLayer.contentsGravity = .resizeAspect
+        outgoingLayer.contentsScale = backingScale
+        outgoingLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        outgoingLayer.allowsEdgeAntialiasing = true
+        outgoingLayer.masksToBounds = true
+        outgoingLayer.cornerRadius = openingDetails ? 30 : 32
+        outgoingLayer.cornerCurve = .continuous
+        hostLayer.addSublayer(outgoingLayer)
+        snapshotTransitionLayer = outgoingLayer
 
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = NSNumber(value: 1)
         fade.toValue = NSNumber(value: 0)
-
-        let move = CABasicAnimation(keyPath: "position")
-        move.fromValue = NSValue(point: overlay.position)
-        move.toValue = NSValue(point: finalPosition)
-
-        let scale = CABasicAnimation(keyPath: "transform")
-        scale.fromValue = NSValue(caTransform3D: CATransform3DIdentity)
-        scale.toValue = NSValue(caTransform3D: finalTransform)
-
-        let group = CAAnimationGroup()
-        group.animations = [fade, move, scale]
-        group.duration = CFTimeInterval(transitionDuration)
-        group.timingFunction = timing
-        group.fillMode = .forwards
-        group.isRemovedOnCompletion = false
+        fade.duration = 0.07
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        fade.fillMode = .forwards
+        fade.isRemovedOnCompletion = false
 
         CATransaction.begin()
-        CATransaction.setCompletionBlock { [weak self, weak overlay] in
-            guard let self else { return }
-            overlay?.removeFromSuperlayer()
-            if self.snapshotTransitionLayer === overlay {
-                self.snapshotTransitionLayer = nil
+        CATransaction.setCompletionBlock { [weak self, weak outgoingLayer] in
+            outgoingLayer?.removeFromSuperlayer()
+            if self?.snapshotTransitionLayer === outgoingLayer {
+                self?.snapshotTransitionLayer = nil
             }
-            self.needsDisplay = true
+            self?.needsDisplay = true
         }
-        overlay.opacity = 0
-        overlay.position = finalPosition
-        overlay.transform = finalTransform
-        overlay.add(group, forKey: "snapshot-page-transition")
+        outgoingLayer.opacity = 0
+        outgoingLayer.add(fade, forKey: "quick-outgoing-fade")
         CATransaction.commit()
     }
 
@@ -1569,16 +1677,6 @@ final class DashboardView: NSView {
             guard let self else { return }
             guard self.window?.isVisible == true else { return }
             self.animationPhase += frameInterval
-            if self.isDetailPageScaleTransitionActive {
-                self.detailPageScaleProgress = min(
-                    1,
-                    self.detailPageScaleProgress + frameInterval / self.transitionDuration
-                )
-                if self.detailPageScaleProgress >= 1 {
-                    self.detailPageScaleProgress = 1
-                    self.isDetailPageScaleTransitionActive = false
-                }
-            }
             if self.detailRingProgress < 1 {
                 self.detailRingProgress = min(1, self.detailRingProgress + frameInterval / self.detailRingDuration)
             }
